@@ -34,6 +34,31 @@ signature without a timestamp.
 Requirements: Bash, GnuPG (`gpg`), OpenTimestamps client (`ots`), and either
 `sha256sum` or `shasum`.
 
+## Publish to the public repository
+
+Clone the repository once on the computer that has the GPG secret key:
+
+```sh
+git clone https://github.com/kagaya/SkySeal.git
+```
+
+After that, sealing and publishing are one command:
+
+```sh
+bash /path/to/SkySeal/skyseal seal --publish /path/to/private-recordings
+```
+
+`--publish` writes the public artifacts into the clone, commits only the newly
+generated hash list, signature, timestamp proof, and (when first needed) public
+key, then performs a normal non-forced `git push`. The private target directory
+is never passed to Git. Existing unrelated working-tree or staged files are not
+included in the SkySeal commit.
+
+GitHub authentication must be configured once through the operating system's
+Git credential manager or an SSH key. Credentials and tokens are not stored by
+the SkySeal script. If the remote branch has advanced, the push stops without
+rewriting history and leaves the new commit safely in the local clone.
+
 ## Existing scripts
 
 - [`make_public_hashlist.sh`](https://gist.github.com/kagaya/a15dd35e66cb749fa2eb4a7860f90d1c)
