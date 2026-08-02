@@ -2,7 +2,7 @@
 # SkySeal one-command sealing workflow.
 #
 # Usage:
-#   bash skyseal seal [--uid UID_OR_FINGERPRINT] [--output-dir DIR] [--force] TARGET_DIR
+#   bash skyseal seal [--uid UID_OR_FINGERPRINT] [--output-dir DIR] [--publish] [--force] TARGET_DIR
 #
 # The public hash list contains SHA-256 digests only. Source paths and file
 # names are deliberately not written to the public artifacts.
@@ -30,6 +30,9 @@ Options:
   --uid UID_OR_FINGERPRINT  GPG signing key. If omitted, use
                             SKYSEAL_GPG_UID or the only available secret key.
   --output-dir DIR          Write public artifacts here (default: current dir).
+  --publish                 Commit and push only the generated public artifacts.
+                            The script must be inside a local kagaya/SkySeal clone.
+  --remote NAME             Git remote used by --publish (default: origin).
   --force                   Back up colliding outputs and continue.
   --no-ots                  Explicitly skip OpenTimestamps sealing.
   -h, --help                Show this help.
@@ -41,6 +44,10 @@ Created artifacts:
 
 The target files themselves are not copied and their names are not published.
 EOF
+}
+
+script_directory() {
+  cd "$(dirname "$0")" && pwd
 }
 
 hash_command() {
@@ -126,14 +133,67 @@ make_hashlist() {
   rm -f -- "$temporary_file"
 }
 
+publish_artifacts() {
+  local repo_root="$1"
+  local remote="$2"
+  local timestamp="$3"
+  shift 3
+  local branch remote_url normalized_url path
+  local -a paths
+
+  paths=("$@")
+  [[ ${#paths[@]} -gt 0 ]] || die "No public artifacts were supplied for publishing."
+
+  remote_url="$(git -C "$repo_root" remote get-url "$remote" 2>/dev/null)" ||
+    die "Git remote not found: $remote"
+  normalized_url="$(printf '%s' "$remote_url" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized_url" in
+    https://github.com/kagaya/skyseal|https://github.com/kagaya/skyseal.git|git@github.com:kagaya/skyseal.git|ssh://git@github.com/kagaya/skyseal.git)
+      ;;
+    *)
+      die "Refusing to publish to unexpected remote: $remote_url"
+      ;;
+  esac
+
+  branch="$(git -C "$repo_root" symbolic-ref --quiet --short HEAD 2>/dev/null)" ||
+    die "Cannot publish from a detached Git HEAD. Check out a branch first."
+  [[ -n "$branch" ]] || die "Could not determine the current Git branch."
+
+  if [[ -n "$(git -C "$repo_root" diff --name-only --diff-filter=U)" ]]; then
+    die "The repository has unresolved merge conflicts. Resolve them before publishing."
+  fi
+
+  # Paths are basenames in the repository root. No source target path is ever
+  # passed to Git, and unrelated staged or working-tree changes are excluded.
+  for path in "${paths[@]}"; do
+    [[ "$path" != */* ]] || die "Unsafe publish path: $path"
+    [[ -f "${repo_root}/${path}" ]] || die "Generated artifact not found: ${repo_root}/${path}"
+  done
+
+  info "Staging only the generated SkySeal artifacts"
+  git -C "$repo_root" add -- "${paths[@]}"
+  git -C "$repo_root" commit --only -m "Add SkySeal record ${timestamp}" -- "${paths[@]}"
+
+  info "Pushing commit to ${remote}/${branch}"
+  if ! git -C "$repo_root" push "$remote" "$branch"; then
+    die "Git push failed. The commit remains safely in the local repository; update the branch and retry the push."
+  fi
+
+  printf '  Published  : %s (%s)\n' "$remote_url" "$branch"
+}
+
 seal() {
   local uid=""
   local output_dir="."
   local force=0
   local use_ots=1
+  local publish=0
+  local remote="origin"
+  local output_dir_given=0
   local target_dir=""
   local timestamp base hashlist signature ots_file pubkey fingerprint
-  local hash_spec
+  local hash_spec repo_root script_dir pubkey_created
+  local -a publish_paths
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -147,6 +207,17 @@ seal() {
         shift
         [[ $# -gt 0 ]] || die "--output-dir requires a value."
         output_dir="$1"
+        output_dir_given=1
+        shift
+        ;;
+      --publish)
+        publish=1
+        shift
+        ;;
+      --remote)
+        shift
+        [[ $# -gt 0 ]] || die "--remote requires a value."
+        remote="$1"
         shift
         ;;
       --force|-f)
@@ -172,8 +243,24 @@ seal() {
 
   [[ -n "$target_dir" ]] || die "TARGET_DIR is required."
   [[ -d "$target_dir" ]] || die "Target directory not found: $target_dir"
+
+  repo_root=""
+  if [[ "$publish" -eq 1 ]]; then
+    [[ "$use_ots" -eq 1 ]] || die "--publish cannot be combined with --no-ots."
+    command -v git >/dev/null 2>&1 || die "git not found in PATH."
+    script_dir="$(script_directory)"
+    repo_root="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null)" ||
+      die "--publish requires skyseal to be run from a local Git clone."
+    if [[ "$output_dir_given" -eq 0 ]]; then
+      output_dir="$repo_root"
+    fi
+  fi
+
   mkdir -p -- "$output_dir"
   output_dir="$(cd "$output_dir" && pwd)"
+  if [[ "$publish" -eq 1 && "$output_dir" != "$repo_root" ]]; then
+    die "--publish writes records to the repository root; omit --output-dir or set it to: $repo_root"
+  fi
 
   command -v gpg >/dev/null 2>&1 || die "gpg not found in PATH."
   if [[ "$use_ots" -eq 1 ]]; then
@@ -214,9 +301,11 @@ seal() {
   fingerprint="$(gpg --batch --with-colons --fingerprint "$uid" | awk -F: '$1 == "fpr" { print $10; exit }')"
   [[ -n "$fingerprint" ]] || die "Could not resolve the signing-key fingerprint."
   pubkey="${output_dir}/publickey_${fingerprint}.asc"
+  pubkey_created=0
   if [[ ! -e "$pubkey" ]]; then
     info "Exporting public key"
     gpg --batch --armor --export "$fingerprint" >"$pubkey"
+    pubkey_created=1
   fi
 
   printf '\nSkySeal completed.\n'
@@ -228,6 +317,14 @@ seal() {
     printf '  Timestamp : skipped by explicit --no-ots\n'
   fi
   printf '  GPG key   : %s\n' "$fingerprint"
+
+  if [[ "$publish" -eq 1 ]]; then
+    publish_paths=("$base" "${base}.asc" "${base}.asc.ots")
+    if [[ "$pubkey_created" -eq 1 ]]; then
+      publish_paths+=("$(basename "$pubkey")")
+    fi
+    publish_artifacts "$repo_root" "$remote" "$timestamp" "${publish_paths[@]}"
+  fi
 }
 
 case "${1:-}" in
