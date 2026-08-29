@@ -1,0 +1,11 @@
+[Unit]
+Description=Upgrade SkySeal OpenTimestamps proofs daily
+
+[Timer]
+OnCalendar=*-*-* 04:10:00 UTC
+RandomizedDelaySec=15min
+Persistent=true
+Unit=skyseal-ots-upgrade.service
+
+[Install]
+WantedBy=timers.target

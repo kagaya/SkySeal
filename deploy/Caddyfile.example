@@ -1,0 +1,13 @@
+# This host is the fixed SkySeal WebAuthn origin. Keep access logging disabled:
+# the ORCID callback carries a short-lived code in its query.
+proof.excyberlab.net {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		Permissions-Policy "camera=(), geolocation=(), microphone=(), payment=()"
+		-Server
+	}
+
+	reverse_proxy 127.0.0.1:8787
+}

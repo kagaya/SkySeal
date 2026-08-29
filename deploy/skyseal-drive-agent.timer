@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the SkySeal Drive agent every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+RandomizedDelaySec=5s
+Persistent=true
+Unit=skyseal-drive-agent.service
+
+[Install]
+WantedBy=timers.target

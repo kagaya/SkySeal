@@ -1,0 +1,9 @@
+{
+  "algorithm": "ES256",
+  "challenge_base64url": "gVKhxWKLO2bMA8nniRP-E7LV1nRq2QApfww_2au7mBg",
+  "genesis_digest": "sha256:826ec0729a73f374a00435237379ed28e4dc453da1e086daeeaf6d9cc8c68081",
+  "hash_list_sha256": "1abfd061a275271d74d4d45a4257984aad07a9250717d2784676964bd59d0262",
+  "member_sha256": "9be45495af0c885c0ca3739b0c5a31d7698e537e9555a172e9dedff6256c7629",
+  "nonmember_sha256": "04c9ccc66897f443390d55a1e51776fb94b0f1829d13b597262d201064c2e507",
+  "signed_bytes_sha256": "d5d724aee4ad9b095f46b13180ca737bc6cd40b5b4e4111b688647c14c982792"
+}

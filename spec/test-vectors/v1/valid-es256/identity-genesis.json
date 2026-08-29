@@ -1,0 +1,20 @@
+{
+  "created_at": "2026-08-29T03:00:00Z",
+  "display_name": "SkySeal Test Researcher",
+  "identity_id": "https://orcid.org/0000-0000-0000-0001",
+  "identity_version": 1,
+  "initial_credential_public_key": {
+    "algorithm": -7,
+    "jwk": {
+      "crv": "P-256",
+      "kty": "EC",
+      "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+      "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+    }
+  },
+  "openpgp_primary_fingerprint": "85F79058BD83EB3889DEF766B065C54586067E2E",
+  "orcid_authenticated_at": "2026-08-29T03:00:00Z",
+  "recovery_code_commitment": "sha256:eef88380d4464430113f70cd203f6df530d654a6838a0dcfb92b5eff7517b2c7",
+  "rp_id": "seal.example.org",
+  "schema": "urn:skyseal:identity-genesis:v1"
+}

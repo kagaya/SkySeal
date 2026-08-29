@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:skyseal:schema:identity-genesis:v1",
+  "title": "SkySeal v1 identity genesis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "identity_id",
+    "identity_version",
+    "display_name",
+    "rp_id",
+    "initial_credential_public_key",
+    "recovery_code_commitment",
+    "openpgp_primary_fingerprint",
+    "orcid_authenticated_at",
+    "created_at"
+  ],
+  "properties": {
+    "schema": {
+      "const": "urn:skyseal:identity-genesis:v1"
+    },
+    "identity_id": {
+      "type": "string",
+      "pattern": "^https://orcid\\.org/[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X]$"
+    },
+    "identity_version": {
+      "const": 1
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "affiliation": {
+      "type": "string",
+      "maxLength": 300
+    },
+    "institutional_email": {
+      "type": "string",
+      "maxLength": 254
+    },
+    "rp_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253
+    },
+    "initial_credential_public_key": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["algorithm", "jwk"],
+          "properties": {
+            "algorithm": {"const": -7},
+            "jwk": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kty", "crv", "x", "y"],
+              "properties": {
+                "kty": {"const": "EC"},
+                "crv": {"const": "P-256"},
+                "x": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+                "y": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["algorithm", "jwk"],
+          "properties": {
+            "algorithm": {"const": -8},
+            "jwk": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kty", "crv", "x"],
+              "properties": {
+                "kty": {"const": "OKP"},
+                "crv": {"const": "Ed25519"},
+                "x": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "recovery_code_commitment": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "openpgp_primary_fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9A-F]{40}$"
+    },
+    "orcid_authenticated_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  }
+}

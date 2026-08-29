@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:skyseal:schema:webauthn-bundle:v1",
+  "title": "SkySeal v1 WebAuthn bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "seal_payload", "webauthn", "identity", "verification"],
+  "properties": {
+    "schema": {
+      "const": "urn:skyseal:webauthn-bundle:v1"
+    },
+    "seal_payload": {
+      "$ref": "urn:skyseal:schema:seal-payload:v1"
+    },
+    "webauthn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client_data_json", "authenticator_data", "signature"],
+      "properties": {
+        "client_data_json": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "authenticator_data": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "orcid",
+        "identity_genesis_digest",
+        "identity_state_digest",
+        "credential_event_digest"
+      ],
+      "properties": {
+        "orcid": {
+          "type": "string",
+          "pattern": "^https://orcid\\.org/[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X]$"
+        },
+        "identity_genesis_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "identity_state_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "credential_event_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rp_id", "allowed_origin"],
+      "properties": {
+        "rp_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "allowed_origin": {
+          "type": "string",
+          "pattern": "^https://[^/]+$"
+        }
+      }
+    }
+  }
+}

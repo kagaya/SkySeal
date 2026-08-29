@@ -1,0 +1,32 @@
+{
+  "identity": {
+    "credential_event_digest": "sha256:826ec0729a73f374a00435237379ed28e4dc453da1e086daeeaf6d9cc8c68081",
+    "identity_genesis_digest": "sha256:826ec0729a73f374a00435237379ed28e4dc453da1e086daeeaf6d9cc8c68081",
+    "identity_state_digest": "sha256:826ec0729a73f374a00435237379ed28e4dc453da1e086daeeaf6d9cc8c68081",
+    "orcid": "https://orcid.org/0000-0000-0000-0001"
+  },
+  "schema": "urn:skyseal:webauthn-bundle:v1",
+  "seal_payload": {
+    "commitment_format": "skyseal-sha256-set-v1",
+    "created_at": "2026-08-29T03:00:00Z",
+    "identity_id": "https://orcid.org/0000-0000-0000-0001",
+    "identity_state_digest": "sha256:826ec0729a73f374a00435237379ed28e4dc453da1e086daeeaf6d9cc8c68081",
+    "identity_version": 1,
+    "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "schema": "urn:skyseal:seal-payload:v1",
+    "seal_id": "0198f6d0-1234-7abc-8def-0123456789ab",
+    "subject_digest": {
+      "algorithm": "sha256",
+      "value": "1abfd061a275271d74d4d45a4257984aad07a9250717d2784676964bd59d0262"
+    }
+  },
+  "verification": {
+    "allowed_origin": "https://seal.example.org",
+    "rp_id": "seal.example.org"
+  },
+  "webauthn": {
+    "authenticator_data": "dztrBoQoSdO4g2n6cEe197DjlrRiy43hBitJfB5Gq-cFAAAAAA",
+    "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiZ1ZLaHhXS0xPMmJNQThubmlSUC1FN0xWMW5ScTJRQXBmd3dfMmF1N21CZyIsIm9yaWdpbiI6Imh0dHBzOi8vYXR0YWNrZXIuZXhhbXBsZSIsImNyb3NzT3JpZ2luIjpmYWxzZX0",
+    "signature": "MEUCIQDDaXySvY5X7lZw0QeojJ3lKCFuCOLHCW4jyKEwOuJ30QIgUMb-qtxsD_nPLTT_OFLVGJpsruJaaEjNVw7WJ5cahXg"
+  }
+}

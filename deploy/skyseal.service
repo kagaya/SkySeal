@@ -1,0 +1,41 @@
+[Unit]
+Description=SkySeal ORCID and passkey service
+Documentation=https://github.com/kagaya/SkySeal
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=skyseal
+Group=skyseal
+WorkingDirectory=/opt/skyseal
+EnvironmentFile=/etc/skyseal/service.env
+StateDirectory=skyseal
+StateDirectoryMode=0700
+UMask=0077
+ExecStartPre=/opt/skyseal/.venv/bin/python /opt/skyseal/deploy/check_config.py service
+ExecStart=/opt/skyseal/.venv/bin/python /opt/skyseal/service/app.py
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/skyseal
+
+[Install]
+WantedBy=multi-user.target

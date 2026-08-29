@@ -1,0 +1,7 @@
+{
+  "schema": "urn:skyseal:deployment-profile:v1",
+  "root_domain": "excyberlab.net",
+  "service_origin": "https://proof.excyberlab.net",
+  "rp_id": "proof.excyberlab.net",
+  "orcid_redirect_uri": "https://proof.excyberlab.net/api/v1/orcid/callback"
+}

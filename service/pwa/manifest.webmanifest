@@ -1,0 +1,9 @@
+{
+  "name": "SkySeal Approval",
+  "short_name": "SkySeal",
+  "description": "Approve privacy-preserving research-data commitments with a passkey.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f6f1",
+  "theme_color": "#12372a"
+}

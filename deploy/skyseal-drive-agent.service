@@ -1,0 +1,36 @@
+[Unit]
+Description=SkySeal private Google Drive sealing pass
+Documentation=https://github.com/kagaya/SkySeal
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=skyseal
+Group=skyseal
+WorkingDirectory=/opt/skyseal
+EnvironmentFile=/etc/skyseal/agent.env
+StateDirectory=skyseal
+StateDirectoryMode=0700
+UMask=0077
+ExecStartPre=/opt/skyseal/.venv/bin/python /opt/skyseal/deploy/check_config.py agent
+ExecStart=/usr/bin/flock --wait 55 /var/lib/skyseal/drive-agent.lock /opt/skyseal/.venv/bin/python /opt/skyseal/drive_agent/agent.py run-once
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/skyseal

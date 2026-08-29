@@ -1,0 +1,9 @@
+{
+  "algorithm": "Ed25519",
+  "challenge_base64url": "Fn2GNV9iTNmn5-dRq2JRM7mazif3uzEsONv74jEjwI4",
+  "genesis_digest": "sha256:ca73b80544f3d827f07d55f9bf99370e43b79ed65d56cefc872c7177d5fdd4b1",
+  "hash_list_sha256": "1abfd061a275271d74d4d45a4257984aad07a9250717d2784676964bd59d0262",
+  "member_sha256": "9be45495af0c885c0ca3739b0c5a31d7698e537e9555a172e9dedff6256c7629",
+  "nonmember_sha256": "04c9ccc66897f443390d55a1e51776fb94b0f1829d13b597262d201064c2e507",
+  "signed_bytes_sha256": "b2009e6092715fe38cf67bf9858bb6869b596b4b09ce6a7fdc4ad1082894d167"
+}

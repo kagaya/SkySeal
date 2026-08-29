@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+var/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.pending.json
+google-service-account*.json
+*.token
+drive-agent-work/
