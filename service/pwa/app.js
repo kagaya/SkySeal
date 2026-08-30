@@ -177,7 +177,7 @@ async function registerPasskey() {
 
 async function approveSeal() {
   if (!state.me?.authenticated) throw new Error("先にORCIDで認証してください。");
-  if (!state.sealId || !state.bearer) throw new Error("承認トランザクションがありません。");
+  if (!state.sealId) throw new Error("承認対象が選択されていません。");
   const button = element("approve-seal");
   button.disabled = true;
   let completed = false;

@@ -374,6 +374,16 @@ class Phase1FlowTests(unittest.TestCase):
         self.assertEqual(headers["X-Frame-Options"], "DENY")
         self.assertIn(b'<script src="/app.js" defer></script>', response.body)
         self.assertNotIn(b"<script>", response.body)
+        app_script = self.app.handle("GET", "/app.js")
+        self.assertEqual(app_script.status, 200)
+        self.assertIn(
+            "if (!state.sealId)".encode(),
+            app_script.body,
+        )
+        self.assertNotIn(b"!state.sealId || !state.bearer", app_script.body)
+        service_worker = self.app.handle("GET", "/sw.js")
+        self.assertEqual(service_worker.status, 200)
+        self.assertIn(b'skyseal-pwa-v3', service_worker.body)
 
     def test_drive_agent_creates_identity_inbox_transaction_without_public_source_metadata(self) -> None:
         self.enroll()

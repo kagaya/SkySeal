@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE = "skyseal-pwa-v2";
+const CACHE = "skyseal-pwa-v3";
 const SHELL = ["/", "/app.js", "/styles.css", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
