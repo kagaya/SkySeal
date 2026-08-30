@@ -237,9 +237,9 @@ curl --retry 8 --retry-delay 1 --retry-all-errors -fsS \
 curl --retry 8 --retry-delay 1 --retry-all-errors -fsS \
   https://proof.excyberlab.net/proofs/ >/dev/null
 
-systemctl is-active --quiet skyseal.service caddy \
-  skyseal-drive-agent.timer skyseal-ots-upgrade.timer || \
-  fail "one or more production units are inactive"
+for unit in skyseal.service caddy skyseal-drive-agent.timer skyseal-ots-upgrade.timer; do
+  systemctl is-active --quiet "$unit" || fail "production unit is inactive: $unit"
+done
 
 log "Update completed at commit $COMMIT"
 printf 'Public evidence: https://proof.excyberlab.net/proofs/\n'
