@@ -40,7 +40,9 @@ from drive_agent.publication import (  # noqa: E402
     PublicationWorker,
 )
 from drive_agent.skyseal import SkySealAPIError, SkySealClient  # noqa: E402
+from drive_agent.sky_witness import JMAHimawariWitness, SkyWitnessError  # noqa: E402
 from drive_agent.state import AgentStore  # noqa: E402
+from verifier.skyseal_verify import canonical_json  # noqa: E402
 
 
 @dataclass
@@ -51,6 +53,7 @@ class AgentRuntime:
     publisher: Any
     store: AgentStore
     ledger: Any | None = None
+    sky_witness: Any | None = None
 
     def scan(self, now: int | None = None) -> list[dict[str, object]]:
         observed_at = int(time.time()) if now is None else now
@@ -61,6 +64,7 @@ class AgentRuntime:
             current_units[reference] = unit
 
         submitted: list[dict[str, object]] = []
+        scan_witness = None
         for row in self.store.ready_units(self.config.settle_seconds, observed_at):
             unit = current_units.get(row["unit_ref"])
             if unit is None or not unit.files:
@@ -80,11 +84,24 @@ class AgentRuntime:
                     subject_digest=hashlib.sha256(hash_list).hexdigest(),
                     entry_count=len(validate_hash_list_bytes(hash_list)),
                 )
-            transaction = (
-                self.skyseal.create(hash_list, receipt.commitment)
-                if receipt is not None
-                else self.skyseal.create(hash_list)
-            )
+            if self.sky_witness is not None and scan_witness is None:
+                scan_witness = self.sky_witness.capture()
+            witness = scan_witness
+            if witness is not None:
+                final_inventory = inventory_unit(self.drive, unit.root)
+                if final_inventory.snapshot_digest != unit.snapshot_digest:
+                    self.store.observe(final_inventory, observed_at)
+                    continue
+            if witness is not None:
+                transaction = self.skyseal.create(
+                    hash_list,
+                    receipt.commitment if receipt is not None else None,
+                    witness.metadata,
+                )
+            elif receipt is not None:
+                transaction = self.skyseal.create(hash_list, receipt.commitment)
+            else:
+                transaction = self.skyseal.create(hash_list)
             job = self.store.add_job(
                 unit_ref=row["unit_ref"],
                 snapshot_digest=unit.snapshot_digest,
@@ -94,6 +111,10 @@ class AgentRuntime:
                 approval_url=transaction.approval_url,
                 ledger_receipt=receipt.content if receipt is not None else None,
                 ledger_commitment=receipt.commitment if receipt is not None else None,
+                sky_witness_json=(
+                    canonical_json(witness.metadata) + b"\n" if witness is not None else None
+                ),
+                sky_witness_image=witness.image if witness is not None else None,
                 now=observed_at,
             )
             submitted.append(
@@ -229,7 +250,10 @@ def build_runtime(config: AgentConfig) -> AgentRuntime:
             config.private_ledger_sheet,
             config.skyseal_server,
         )
-    return AgentRuntime(config, drive, skyseal, publisher, store, ledger)
+    sky_witness = (
+        JMAHimawariWitness() if config.sky_witness_mode == "required" else None
+    )
+    return AgentRuntime(config, drive, skyseal, publisher, store, ledger, sky_witness)
 
 
 def print_events(events: list[dict[str, object]]) -> None:
@@ -301,6 +325,7 @@ def main(argv: list[str] | None = None) -> int:
         SkySealAPIError,
         PublicationError,
         PrivateLedgerError,
+        SkyWitnessError,
         ValueError,
     ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

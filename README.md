@@ -1,10 +1,10 @@
 # SkySeal
 a time stamp system
 
-## SkySeal v1.1 development
+## SkySeal v1.2 development
 
 - [Normative v1 core](spec/v1.md)
-- [Offline v1.1 verifier](verifier/README.md)
+- [Offline v1.2 verifier](verifier/README.md)
 - `make_public_hashlist_v1.sh`: strict v1 hash-set creator
 - [Phase 1 ORCID/passkey service](service/README.md)
 - [Phase 1 PC client](cli/skyseal_pc.py)
@@ -21,6 +21,9 @@ a time stamp system
   managed configuration checks, service restarts, and endpoint verification
 - Public evidence index: `https://proof.excyberlab.net/proofs/`; complete
   packages are persisted on the VPS before GitHub mirroring
+- New seals include a signed JMA Himawari full-disk infrared image as
+  `sky-witness.json` and `sky-witness.jpg`. This is the physical Earth-state
+  witness from which the SkySeal name is derived.
 
 Existing root-level evidence files remain legacy artifacts and are not rewritten
 by the v1 work.
@@ -66,6 +69,16 @@ User Verified signature checks, and confirmed OpenTimestamps establishes that
 the exact candidate hash was in the Passkey-approved set and that the timestamp
 targets existed before the independently attested Bitcoin time. No secret key
 or cooperation from the owner is required after sealing.
+
+For a v1.2 package, the report also returns `sky_witness` with
+`artifacts_checked: true`. The verifier has then confirmed that the published
+Himawari JPEG hash equals the JMA observation record embedded in the
+Passkey-signed payload. The observation supplies human-inspectable physical
+context and a provider-dependent lower-bound claim: the complete signed bundle
+could not have included those exact image bytes before that observation
+existed. OpenTimestamps supplies the independent upper bound. A historical JMA
+image can be copied later, so the sky witness alone is not a trustless timestamp
+and does not replace OpenTimestamps.
 
 For the current production identity, the expected `identity_id` is
 `https://orcid.org/0000-0003-3001-7690`. Associating that ORCID record with

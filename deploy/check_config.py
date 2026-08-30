@@ -211,6 +211,10 @@ def check_agent() -> int:
     checks.require(private_mode(config.skyseal_agent_token_file), "SkySeal agent token must have mode 600")
     checks.require(private_mode(config.github_token_file), "GitHub token must have mode 600")
     check_service_account(checks, config.google_service_account_file)
+    checks.require(
+        config.sky_witness_mode == "required",
+        "production Drive agent must require the JMA Himawari sky witness",
+    )
 
     for executable in ("ots", "flock"):
         checks.require(shutil.which(executable) is not None, f"required command is missing: {executable}")

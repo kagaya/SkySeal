@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from drive_agent.google_drive import DriveAPIError, validate_hash_list_bytes
 from verifier.skyseal_verify import HASH_LIST_FORMAT, parse_json_bytes, validate_orcid
+from verifier.skyseal_verify import validate_sky_witness
 
 
 class SkySealAPIError(RuntimeError):
@@ -78,7 +79,10 @@ class SkySealClient:
         return value
 
     def create(
-        self, hash_list: bytes, private_ledger_commitment: str | None = None
+        self,
+        hash_list: bytes,
+        private_ledger_commitment: str | None = None,
+        sky_witness: dict[str, object] | None = None,
     ) -> SealTransaction:
         try:
             records = validate_hash_list_bytes(hash_list)
@@ -91,6 +95,8 @@ class SkySealClient:
         }
         if private_ledger_commitment is not None:
             payload["private_ledger_commitment"] = private_ledger_commitment
+        if sky_witness is not None:
+            payload["sky_witness"] = validate_sky_witness(sky_witness)
         response = self._object(
             self._request(
                 "/api/v1/seals",

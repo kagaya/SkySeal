@@ -49,6 +49,7 @@ from verifier.skyseal_verify import (
     encode_base64url,
     parse_json_bytes,
     validate_orcid,
+    validate_sky_witness,
 )  # noqa: E402
 
 
@@ -271,7 +272,8 @@ class Application:
                 ("Referrer-Policy", "no-referrer"),
                 (
                     "Content-Security-Policy",
-                    "default-src 'none'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+                    "default-src 'none'; style-src 'self'; img-src 'self'; "
+                    "base-uri 'none'; frame-ancestors 'none'",
                 ),
             ],
         )
@@ -394,10 +396,61 @@ class Application:
             )
         relative_path = str(record["relative_path"])
         base_url = "/" + quote(relative_path, safe="/")
+        package_path = (self.public_root / relative_path).resolve()
+        if self.public_root not in package_path.parents:
+            raise VerificationError("public evidence path escapes its root")
+        manifest_path = package_path / "manifest.json"
+        if manifest_path.exists():
+            try:
+                if manifest_path.stat().st_size > 1024 * 1024:
+                    raise VerificationError("public evidence manifest is too large")
+                manifest = parse_json_bytes(
+                    manifest_path.read_bytes(), "public evidence manifest"
+                )
+            except OSError as exc:
+                raise VerificationError("public evidence manifest is unreadable") from exc
+            if (
+                not isinstance(manifest, dict)
+                or not isinstance(manifest.get("artifacts"), dict)
+                or any(
+                    not isinstance(name, str)
+                    or name in {".", ".."}
+                    or PUBLIC_PATH_COMPONENT_RE.fullmatch(name) is None
+                    for name in manifest["artifacts"]
+                )
+            ):
+                raise VerificationError("public evidence manifest is invalid")
+            artifact_names = ["manifest.json", *sorted(manifest["artifacts"])]
+        else:
+            manifest = {"artifacts": {name: {} for name in PUBLIC_ARTIFACTS[1:]}}
+            artifact_names = list(PUBLIC_ARTIFACTS)
         links = "".join(
             f'<li><a href="{base_url}/{quote(name, safe="")}">{html.escape(name)}</a></li>'
-            for name in PUBLIC_ARTIFACTS
+            for name in artifact_names
         )
+        sky_section = ""
+        if {"sky-witness.json", "sky-witness.jpg"} <= set(manifest["artifacts"]):
+            try:
+                witness = validate_sky_witness(
+                    parse_json_bytes(
+                        (package_path / "sky-witness.json").read_bytes(),
+                        "published sky witness",
+                    )
+                )
+            except OSError as exc:
+                raise VerificationError("published sky witness is unreadable") from exc
+            sky_section = f"""
+<section class="card">
+  <h2>Sky witness</h2>
+  <img class="sky-witness" src="{base_url}/sky-witness.jpg"
+       alt="{html.escape(str(witness['observation_time']))} のひまわり赤外全球画像">
+  <dl>
+    <div><dt>観測時刻</dt><dd>{html.escape(str(witness['observation_time']))}</dd></div>
+    <div><dt>観測</dt><dd>{html.escape(str(witness['provider']))}</dd></div>
+    <div><dt>プロダクト</dt><dd>{html.escape(str(witness['product']))}</dd></div>
+  </dl>
+  <p class="hint">この画像とハッシュはパスキー署名対象です。地球の物理的文脈を与えますが、画像単独を信頼不要な時刻証明とは扱いません。</p>
+</section>"""
         identity_id = str(record["identity_id"])
         mirror_label = (
             "同期済み" if record["github_mirror"] == "synced" else "未同期・自動再試行中"
@@ -423,6 +476,7 @@ class Application:
     <div><dt>GitHub</dt><dd>{mirror_label}</dd></div>
   </dl>
 </section>
+{sky_section}
 <section class="card">
   <h2>証拠ファイル</h2>
   <p>原ファイル、ファイル名、Drive上のパスは含まれていません。</p>
@@ -924,7 +978,7 @@ class Application:
             self._parse_json(body, "seal creation"),
             {"commitment_format", "subject_digest", "entry_count"},
             "seal creation",
-            {"private_ledger_commitment"},
+            {"private_ledger_commitment", "sky_witness"},
         )
         if request["commitment_format"] != HASH_LIST_FORMAT:
             raise VerificationError("unsupported commitment format")
@@ -947,6 +1001,11 @@ class Application:
                 or DIGEST_RE.fullmatch(private_ledger_commitment) is None
             ):
                 raise VerificationError("private_ledger_commitment must be a SHA-256 digest")
+        sky_witness = request.get("sky_witness")
+        if sky_witness is not None:
+            if agent is None:
+                raise PermissionError("sky witnesses require a Drive agent")
+            sky_witness = validate_sky_witness(sky_witness)
         seal_id = uuid7()
         bearer, row = self.store.create_seal(
             seal_id=seal_id,
@@ -954,6 +1013,7 @@ class Application:
             subject_digest=subject_digest,
             entry_count=entry_count,
             private_ledger_commitment=private_ledger_commitment,
+            sky_witness_json=(canonical_json(sky_witness) if sky_witness is not None else None),
             lifetime_seconds=self.config.transaction_lifetime_seconds,
             identity_id=agent["orcid"] if agent is not None else None,
             source="drive_agent" if agent is not None else "interactive",
@@ -1004,6 +1064,11 @@ class Application:
                         "status": row["status"],
                         "created_at": row["created_at"],
                         "expires_at": row["expires_at"],
+                        "sky_witness": (
+                            parse_json_bytes(bytes(row["sky_witness_json"]), "stored sky witness")
+                            if row["sky_witness_json"] is not None
+                            else None
+                        ),
                     }
                     for row in rows
                 ],
@@ -1065,6 +1130,10 @@ class Application:
         }
         if seal["private_ledger_commitment"] is not None:
             payload["private_ledger_commitment"] = seal["private_ledger_commitment"]
+        if seal["sky_witness_json"] is not None:
+            payload["sky_witness"] = validate_sky_witness(
+                parse_json_bytes(bytes(seal["sky_witness_json"]), "stored sky witness")
+            )
         payload_json = canonical_json(payload)
         challenge = compute_challenge(payload)
         self.store.set_seal_options(
@@ -1092,6 +1161,7 @@ class Application:
                 "confirmation_code": f"{code[:4]}-{code[4:]}",
                 "entry_count": seal["entry_count"],
                 "identity_id": session["orcid"],
+                "sky_witness": payload.get("sky_witness"),
                 "development_unsealed_identity_bypass": (
                     identity["status"] != "active" and self.config.allow_unsealed_identity
                 ),

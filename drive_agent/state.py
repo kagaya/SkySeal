@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS jobs (
         ledger_status IN ('disabled', 'pending', 'synced')
     ),
     ledger_error TEXT,
+    sky_witness_json BLOB,
+    sky_witness_image BLOB,
     github_status TEXT NOT NULL DEFAULT 'pending',
     github_error TEXT,
     error_code TEXT,
@@ -110,6 +112,10 @@ class AgentStore:
                     )
                 if "ledger_error" not in job_columns:
                     connection.execute("ALTER TABLE jobs ADD COLUMN ledger_error TEXT")
+                if "sky_witness_json" not in job_columns:
+                    connection.execute("ALTER TABLE jobs ADD COLUMN sky_witness_json BLOB")
+                if "sky_witness_image" not in job_columns:
+                    connection.execute("ALTER TABLE jobs ADD COLUMN sky_witness_image BLOB")
         finally:
             os.umask(previous_umask)
         for candidate in (
@@ -195,6 +201,8 @@ class AgentStore:
         approval_url: str,
         ledger_receipt: bytes | None = None,
         ledger_commitment: str | None = None,
+        sky_witness_json: bytes | None = None,
+        sky_witness_image: bytes | None = None,
         now: int | None = None,
     ) -> sqlite3.Row:
         created_at = int(time.time()) if now is None else now
@@ -211,8 +219,9 @@ class AgentStore:
                 INSERT INTO jobs
                 (unit_ref, snapshot_digest, status, hash_list, subject_digest,
                  entry_count, seal_id, bearer_token, approval_url,
-                 ledger_receipt, ledger_commitment, ledger_status, created_at, updated_at)
-                VALUES (?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ledger_receipt, ledger_commitment, ledger_status,
+                 sky_witness_json, sky_witness_image, created_at, updated_at)
+                VALUES (?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     unit_ref,
@@ -226,6 +235,8 @@ class AgentStore:
                     ledger_receipt,
                     ledger_commitment,
                     "pending" if ledger_receipt is not None else "disabled",
+                    sky_witness_json,
+                    sky_witness_image,
                     created_at,
                     created_at,
                 ),

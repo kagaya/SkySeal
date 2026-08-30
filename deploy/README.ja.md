@@ -202,12 +202,14 @@ sudo -u skyseal /opt/skyseal/.venv/bin/python \
 
 1. 専用 Drive フォルダ直下へ、公開しても内容を推測されないテストファイルを1個置く。
 2. 120秒変更せず待つ。
-3. iPhone / iPad の PWA に、ファイル名なしで到着時刻とハッシュ件数だけが出ることを確認する。
+3. iPhone / iPad の PWA に、ファイル名なしで到着時刻、ハッシュ件数、ひまわり観測時刻が
+   出ることを確認する。
 4. Passkey で承認する。
 5. `https://proof.excyberlab.net/proofs/` に証拠が現れ、各証拠ファイルをVPSから取得できることを確認する。
 6. GitHub の `evidence/YYYY/MM/<opaque-seal-id>/` に、ハッシュ一覧、seal署名、
-   `identity-genesis.json`、`identity-activation.json`、両OpenTimestamps証明、および
-   manifestが公開されることを確認する。
-7. 元ファイルを第三者へ渡さずに公開 verifier が成立し、別途同一ファイルを与えた場合だけ照合できることを確認する。
+   `identity-genesis.json`、`identity-activation.json`、両OpenTimestamps証明、
+   `sky-witness.json`、`sky-witness.jpg`、およびmanifestが公開されることを確認する。
+7. 公開詳細ページにひまわり赤外全球画像と観測時刻が表示されることを確認する。
+8. 元ファイルを第三者へ渡さずに公開 verifier が成立し、別途同一ファイルを与えた場合だけ照合できることを確認する。
 
 本番の論文・データセットを入れるのは、このテストに合格してからにする。

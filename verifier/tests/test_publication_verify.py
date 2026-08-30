@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from verifier.skyseal_publication_verify import (
     ARTIFACT_NAMES,
+    SKY_WITNESS_ARTIFACT_NAMES,
     verify_manifest,
     verify_publication,
 )
@@ -47,6 +48,26 @@ class PublicationVerifierTests(unittest.TestCase):
             )
             (root / "hashes.txt").write_bytes(b"tampered\n")
             with self.assertRaisesRegex(VerificationError, "digest mismatch"):
+                verify_manifest(root)
+
+    def test_manifest_accepts_complete_sky_witness_pair_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_package(root)
+            manifest = verify_manifest(root)
+            for name in SKY_WITNESS_ARTIFACT_NAMES:
+                (root / name).write_bytes(("fixture:" + name + "\n").encode())
+                manifest["artifacts"][name] = {
+                    "sha256": "sha256:" + hashlib.sha256((root / name).read_bytes()).hexdigest()
+                }
+            (root / "manifest.json").write_bytes(canonical_json(manifest) + b"\n")
+            self.assertEqual(
+                set(verify_manifest(root)["artifacts"]),
+                ARTIFACT_NAMES | SKY_WITNESS_ARTIFACT_NAMES,
+            )
+            del manifest["artifacts"]["sky-witness.jpg"]
+            (root / "manifest.json").write_bytes(canonical_json(manifest) + b"\n")
+            with self.assertRaisesRegex(VerificationError, "artifact set"):
                 verify_manifest(root)
 
     def test_pending_timestamps_are_explicit_and_never_claimed_confirmed(self) -> None:

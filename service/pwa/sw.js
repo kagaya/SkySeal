@@ -1,7 +1,7 @@
 "use strict";
 
-const CACHE = "skyseal-pwa-v4";
-const SHELL = ["/", "/app.js?v=4", "/styles.css", "/manifest.webmanifest"];
+const CACHE = "skyseal-pwa-v5";
+const SHELL = ["/", "/app.js?v=5", "/styles.css", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));

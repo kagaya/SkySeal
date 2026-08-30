@@ -64,6 +64,9 @@
     "private_ledger_commitment": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "sky_witness": {
+      "$ref": "sky-witness-v1.schema.json"
     }
   }
 }

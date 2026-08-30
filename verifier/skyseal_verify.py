@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict, offline verifier for SkySeal v1.1 public evidence."""
+"""Strict, offline verifier for SkySeal v1.2 public evidence."""
 
 from __future__ import annotations
 
@@ -26,13 +26,14 @@ except ImportError as exc:  # pragma: no cover - exercised by deployment, not te
     ) from exc
 
 
-VERSION = "1.1.0-draft.1"
+VERSION = "1.2.0-draft.1"
 HASH_LIST_FORMAT = "skyseal-sha256-set-v1"
 PAYLOAD_SCHEMA = "urn:skyseal:seal-payload:v1"
 BUNDLE_SCHEMA = "urn:skyseal:webauthn-bundle:v1"
 GENESIS_SCHEMA = "urn:skyseal:identity-genesis:v1"
 IDENTITY_ACTIVATION_PAYLOAD_SCHEMA = "urn:skyseal:identity-activation-payload:v1"
 IDENTITY_ACTIVATION_SCHEMA = "urn:skyseal:identity-activation:v1"
+SKY_WITNESS_SCHEMA = "urn:skyseal:sky-witness:v1"
 DOMAIN_SEPARATOR = b"SkySeal WebAuthn Challenge v1\x00"
 IDENTITY_ACTIVATION_DOMAIN_SEPARATOR = b"SkySeal Identity Activation Challenge v1\x00"
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
@@ -51,6 +52,9 @@ TIMESTAMP_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2
 RP_ID_RE = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+)
+JMA_SKY_WITNESS_URL_RE = re.compile(
+    r"https://www\.data\.jma\.go\.jp/mscweb/data/himawari/img/fd_/fd__b13_([0-9]{4})\.jpg"
 )
 
 
@@ -302,6 +306,53 @@ def parse_hash_list(path: Path) -> tuple[list[str], str]:
     return hashes_out, digest
 
 
+def validate_sky_witness(value: Any) -> dict[str, Any]:
+    witness = _require_object(value, "sky_witness")
+    required = {
+        "schema",
+        "provider",
+        "platform",
+        "product",
+        "observation_time",
+        "retrieved_at",
+        "source_url",
+        "media_type",
+        "image_digest",
+        "attribution",
+    }
+    _require_exact_keys(witness, required, set(), "sky_witness")
+    constants = {
+        "schema": SKY_WITNESS_SCHEMA,
+        "provider": "Japan Meteorological Agency (JMA)",
+        "platform": "Himawari-8/9",
+        "product": "Full Disk Band 13 infrared",
+        "media_type": "image/jpeg",
+        "attribution": "Japan Meteorological Agency (JMA)",
+    }
+    for member, expected in constants.items():
+        if witness[member] != expected:
+            fail(f"sky_witness.{member}: unsupported value")
+    validate_timestamp(witness["observation_time"], "sky_witness.observation_time")
+    validate_timestamp(witness["retrieved_at"], "sky_witness.retrieved_at")
+    observation = datetime.strptime(witness["observation_time"], "%Y-%m-%dT%H:%M:%SZ")
+    retrieved = datetime.strptime(witness["retrieved_at"], "%Y-%m-%dT%H:%M:%SZ")
+    if observation.second != 0 or observation.minute % 10 != 0:
+        fail("sky_witness.observation_time: expected a ten-minute observation slot")
+    if retrieved < observation:
+        fail("sky_witness.retrieved_at: precedes the observation")
+    source_url = _require_fullmatch(
+        JMA_SKY_WITNESS_URL_RE,
+        witness["source_url"],
+        "sky_witness.source_url",
+    )
+    source_match = JMA_SKY_WITNESS_URL_RE.fullmatch(source_url)
+    assert source_match is not None
+    if source_match.group(1) != observation.strftime("%H%M"):
+        fail("sky_witness.source_url: time slot does not match observation_time")
+    _require_fullmatch(DIGEST_RE, witness["image_digest"], "sky_witness.image_digest")
+    return witness
+
+
 def validate_payload(value: Any) -> dict[str, Any]:
     payload = _require_object(value, "seal_payload")
     required = {
@@ -315,7 +366,12 @@ def validate_payload(value: Any) -> dict[str, Any]:
         "nonce",
         "created_at",
     }
-    _require_exact_keys(payload, required, {"private_ledger_commitment"}, "seal_payload")
+    _require_exact_keys(
+        payload,
+        required,
+        {"private_ledger_commitment", "sky_witness"},
+        "seal_payload",
+    )
     if payload["schema"] != PAYLOAD_SCHEMA:
         fail("seal_payload.schema: unsupported schema")
     _require_fullmatch(UUID7_RE, payload["seal_id"], "seal_payload.seal_id")
@@ -341,6 +397,8 @@ def validate_payload(value: Any) -> dict[str, Any]:
             payload["private_ledger_commitment"],
             "seal_payload.private_ledger_commitment",
         )
+    if "sky_witness" in payload:
+        validate_sky_witness(payload["sky_witness"])
     return payload
 
 
@@ -670,6 +728,8 @@ def verify_bundle(
     trusted_rp_id: str,
     trusted_origin: str,
     identity_activation_path: Path | None = None,
+    sky_witness_path: Path | None = None,
+    sky_witness_image_path: Path | None = None,
 ) -> dict[str, Any]:
     trusted_rp_id = validate_rp_id(trusted_rp_id, "trusted RP ID")
     trusted_origin = validate_origin(trusted_origin, "trusted origin")
@@ -727,6 +787,44 @@ def verify_bundle(
         context="seal assertion",
     )
 
+    sky_witness_report = None
+    sky_witness_checked = False
+    if "sky_witness" in payload:
+        signed_witness = payload["sky_witness"]
+        if (sky_witness_path is None) != (sky_witness_image_path is None):
+            fail("both sky witness metadata and image are required together")
+        if sky_witness_path is not None and sky_witness_image_path is not None:
+            artifact_witness = validate_sky_witness(
+                load_json(sky_witness_path, "sky witness metadata")
+            )
+            if not hmac.compare_digest(
+                canonical_json(signed_witness), canonical_json(artifact_witness)
+            ):
+                fail("sky witness metadata does not match the signed payload")
+            try:
+                size = sky_witness_image_path.stat().st_size
+                with sky_witness_image_path.open("rb") as handle:
+                    start = handle.read(2)
+                    handle.seek(-2, 2)
+                    end = handle.read(2)
+            except OSError as exc:
+                fail(f"sky witness image cannot be read: {exc}")
+            if not 1024 <= size <= 2 * 1024 * 1024 or start != b"\xff\xd8" or end != b"\xff\xd9":
+                fail("sky witness image is not an accepted complete JPEG")
+            image_digest = "sha256:" + _hash_file(sky_witness_image_path)
+            if not hmac.compare_digest(image_digest, signed_witness["image_digest"]):
+                fail("sky witness image digest does not match the signed payload")
+            sky_witness_checked = True
+        sky_witness_report = {
+            "provider": signed_witness["provider"],
+            "product": signed_witness["product"],
+            "observation_time": signed_witness["observation_time"],
+            "retrieved_at": signed_witness["retrieved_at"],
+            "source_url": signed_witness["source_url"],
+            "image_digest": signed_witness["image_digest"],
+            "artifacts_checked": sky_witness_checked,
+        }
+
     return {
         "ok": True,
         "verifier_version": VERSION,
@@ -740,6 +838,7 @@ def verify_bundle(
         "sign_count": sign_count,
         "user_present": True,
         "user_verified": True,
+        "sky_witness": sky_witness_report,
         "checked": [
             "strict hash-list format",
             "hash-list subject digest",
@@ -748,8 +847,12 @@ def verify_bundle(
             "WebAuthn challenge binding",
             "User Present and User Verified flags",
             f"{algorithm_name} assertion signature",
-        ] + (["ORCID-bound Passkey identity activation"] if activation_report else []),
-        "not_checked": ([] if activation_report else ["Passkey identity activation proof"]) + [
+        ]
+        + (["ORCID-bound Passkey identity activation"] if activation_report else [])
+        + (["signed JMA Himawari image digest"] if sky_witness_checked else []),
+        "not_checked": ([] if activation_report else ["Passkey identity activation proof"])
+        + (["sky witness image artifact"] if sky_witness_report and not sky_witness_checked else [])
+        + [
             "optional detached OpenPGP identity link",
             "credential events after genesis",
             "OpenTimestamps proof",

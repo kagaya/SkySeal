@@ -1,7 +1,7 @@
 # SkySeal Phase 2 Drive and publication protocol
 
 Status: reference implementation baseline
-Version: 1.1.0-draft.1
+Version: 1.2.0-draft.1
 Date: 2026-08-30
 
 Phase 2 turns a completed upload in a private Google Drive inbox into a
@@ -17,7 +17,9 @@ With the optional owner ledger enabled, it also reads only the root sealing
 unit's display name and writes a salted private receipt to one explicitly
 shared Google Sheet. The public SkySeal service receives the strict hash-list
 digest, distinct hash count, protocol state, and only the receipt commitment.
-GitHub and OpenTimestamps receive only public artifacts.
+GitHub and OpenTimestamps receive only public artifacts. JMA receives an
+ordinary HTTPS request for a public Himawari image and no Drive identifiers or
+artifact hashes.
 
 The recommended Google identity is a dedicated service account. Only the inbox
 folder is shared read-only with that address. Domain-wide delegation is not
@@ -46,6 +48,23 @@ After local publication the Sheet row is appended idempotently. It includes
 the Seal ID, public proof URL, and exact receipt JSON. A Sheets failure leaves
 `ledger_status=pending` in the private agent database and is retried; it does
 not remove VPS evidence or block the independent GitHub mirror.
+
+### 1.2 Required physical sky witness
+
+Production seal creation includes `urn:skyseal:sky-witness:v1`. The agent uses
+the JMA Himawari full-disk Band 13 infrared product because it is available day
+and night. It selects a recent ten-minute UTC slot and retrieves the exact JPEG
+from JMA. Since the source URL contains only HHMM and is reused every day, the
+agent MUST require a parseable HTTP `Last-Modified` value consistent with the
+intended dated slot, a JPEG content type and complete JPEG framing, and a size
+within the publication limit. It tries earlier recent slots when an observation
+is not yet available.
+
+The strict metadata object records provider, platform series, product,
+observation time, retrieval time, source URL, media type, attribution and exact
+image SHA-256. The complete object enters `seal_payload.sky_witness`; therefore
+the WebAuthn challenge and Passkey signature bind it. A failed required capture
+prevents seal creation and is retried by the next timer run.
 
 ## 2. Sealing units and upload stability
 
@@ -104,6 +123,9 @@ hash count, state, and expiration. WebAuthn options and assertions can then be
 authorized by the identity session without copying the private agent bearer to
 the phone.
 
+For a sky-witness seal, the pending list and approval view also show the public
+Himawari observation time. They still receive no Drive names, paths or bytes.
+
 ## 5. Approval and retrieval
 
 The iPhone, iPad, or PC browser performs the Phase 1 WebAuthn assertion. After
@@ -135,8 +157,14 @@ evidence/YYYY/MM/<seal-id>/
   identity-genesis.json
   identity-activation.json
   identity-activation.json.ots
+  sky-witness.json
+  sky-witness.jpg
   manifest.json
 ```
+
+The two `sky-witness` files are present together on v1.2 seals and absent
+together on legacy packages. `sky-witness.json` MUST equal the signed metadata
+object and `sky-witness.jpg` MUST match its signed SHA-256 digest.
 
 `manifest.json` uses `urn:skyseal:publication-manifest:v2`. The complete package
 is written atomically to the VPS public root first. It then appears through
@@ -156,7 +184,8 @@ Drive unit and its seal; it must be protected and excluded from backups that do
 not meet the same confidentiality standard.
 
 The public hash set permits known-candidate membership tests. Publication also
-reveals ORCID, distinct-hash count, and approximate processing time.
+reveals ORCID, distinct-hash count, approximate processing time, the selected
+JMA image and its observation/retrieval metadata.
 OpenTimestamps calendar submissions can reveal timing and network metadata and
 can make closely timed submissions correlatable. These are explicit v1 limits.
 
@@ -170,6 +199,8 @@ chooses to disclose it.
 
 - A changing unit returns to the settling state.
 - A checksum mismatch prevents submission.
+- Failure to obtain and validate a current required JMA observation prevents
+  submission; a later timer pass retries without creating a witness-free seal.
 - Expired, rejected, or invalidated approvals become private error records.
 - Timestamp proofs are stored privately and the complete public package is
   persisted on the VPS before GitHub mirroring.
@@ -188,3 +219,5 @@ chooses to disclose it.
 - [Google service-account OAuth](https://developers.google.com/identity/protocols/oauth2/service-account)
 - [GitHub repository contents API](https://docs.github.com/en/rest/repos/contents)
 - [OpenTimestamps client](https://github.com/opentimestamps/opentimestamps-client)
+- [JMA Himawari real-time imagery](https://www.data.jma.go.jp/mscweb/data/himawari/)
+- [JMA satellite observation schedule](https://www.jma.go.jp/jma/jma-eng/satellite/introduction/satobs.html)

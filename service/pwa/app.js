@@ -75,6 +75,8 @@ function selectPendingSeal(seal) {
   state.bearer = null;
   element("seal-id").textContent = state.sealId;
   element("confirmation-code").textContent = "承認開始後に表示";
+  show("sky-witness-row", Boolean(seal.sky_witness));
+  element("sky-witness-time").textContent = seal.sky_witness?.observation_time || "";
   show("approval-card");
   element("approval-card").scrollIntoView({behavior: "smooth", block: "start"});
 }
@@ -89,7 +91,10 @@ async function loadPending() {
     item.className = "pending-item";
     const description = document.createElement("p");
     const created = new Date(seal.created_at * 1000).toLocaleString();
-    description.textContent = `${created}・${seal.entry_count}件のハッシュ`;
+    const sky = seal.sky_witness
+      ? `・ひまわり観測 ${new Date(seal.sky_witness.observation_time).toLocaleString()}`
+      : "";
+    description.textContent = `${created}・${seal.entry_count}件のハッシュ${sky}`;
     const button = document.createElement("button");
     button.className = "secondary";
     button.textContent = "確認して承認";
@@ -188,6 +193,8 @@ async function approveSeal() {
       headers: csrfHeaders(authorization),
     });
     element("confirmation-code").textContent = options.confirmation_code;
+    show("sky-witness-row", Boolean(options.sky_witness));
+    element("sky-witness-time").textContent = options.sky_witness?.observation_time || "";
     if (options.development_unsealed_identity_bypass) {
       element("approval-warning").textContent = "開発用設定：本人登録が未完了のIDで承認しています。公開用途には使用できません。";
       show("approval-warning");

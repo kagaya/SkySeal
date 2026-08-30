@@ -93,6 +93,7 @@ pre { margin: 0; color: var(--muted); }
 .proof-list li { display: grid; gap: 4px; }
 .proof-list span { color: var(--muted); font-size: .9rem; }
 .artifact-list { display: grid; gap: 8px; }
+.sky-witness { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); }
 a { color: var(--green); overflow-wrap: anywhere; }
 
 @media (max-width: 520px) {

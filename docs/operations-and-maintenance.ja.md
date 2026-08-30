@@ -1,7 +1,7 @@
 # SkySeal 本番運用仕様書・保守手引き
 
 - 更新日: 2026-08-30
-- 対象: SkySeal v1.1 本番環境
+- 対象: SkySeal v1.2 本番環境
 - 本番URL: <https://proof.excyberlab.net/>
 - 公開証拠一覧: <https://proof.excyberlab.net/proofs/>
 
@@ -35,7 +35,8 @@ Git、チャット、Issue、画面共有へ貼らないこと。
 ### 通常行うことは二つだけ
 
 1. 原ファイルをGoogle Driveの`SkySeal Inbox`直下へ置き、約120秒変更せず待つ。iPhoneで
-   <https://proof.excyberlab.net/> を開き、対象Seal IDとハッシュ件数を確認してPasskey承認する。
+   <https://proof.excyberlab.net/> を開き、対象Seal ID、ハッシュ件数、ひまわり観測時刻を確認して
+   Passkey承認する。
 2. ソフトウェア更新後は、任意の管理端末から次を実行する。
 
 ```bash
@@ -73,13 +74,19 @@ Webからは次を確認する。
 
 SkySealは、Google Drive上の原ファイルを公開せず、そのSHA-256ハッシュ集合に対して、
 ORCIDで特定した本人がPasskeyで承認した証拠を作る。証拠にはOpenTimestampsを付け、VPSへ
-先に保存し、その後GitHubへ同じ内容をミラーする。
+先に保存し、その後GitHubへ同じ内容をミラーする。新規sealでは同時期のJMAひまわり赤外全球
+画像のハッシュと観測メタデータもPasskey署名対象に入れ、地球の物理的状態を添える。
 
 公開証拠が主張するのは次の内容である。
 
 - あるバイト列集合のSHA-256ハッシュ集合が存在した。
 - ORCIDに結び付いたPasskeyのUser PresentとUser Verifiedを伴う署名で承認された。
 - `.ots`を検証できる時点では、その対象証拠がブロックチェーン時刻より前に存在した。
+- 公開されたひまわり画像が、Passkey署名済みの観測メタデータと同一バイト列である。
+
+ひまわり画像は物理的文脈とJMAを信頼した下限時刻を与え、OpenTimestampsは独立した上限時刻を
+与える。過去画像を後から添えること自体は可能なので、ひまわり画像単独を信頼不要なtimestamp
+とは扱わず、OpenTimestampsを置き換えない。
 
 非公開台帳を有効にしていない証拠は、次の内容を主張しない。
 
@@ -96,6 +103,7 @@ ORCIDで特定した本人がPasskeyで承認した証拠を作る。証拠に�
 ```mermaid
 flowchart TD
     D["Google Drive\nSkySeal Inbox"] -->|readonly stream| A["Drive agent\nskyseal-agent"]
+    J["JMA Himawari\nBand 13"] -->|public JPEG| A
     A -->|digest + count only| S["SkySeal service\nskyseal"]
     I["iPhone / iPad\nORCID + Passkey"] -->|explicit approval| S
     S -->|approved artifacts| A
@@ -112,6 +120,7 @@ flowchart TD
 |---|---|---|
 | Google Drive | 原ファイル、名前、構造 | SkySealのPasskey秘密鍵 |
 | `skyseal-agent` | 専用Inbox、Drive ID、原バイトのストリーム、非公開ジョブ情報、台帳有効時のroot名 | Passkey秘密鍵 |
+| JMA | 公開画像への通常HTTPSアクセス時刻と接続元 | Drive ID、ファイルhash、ORCID |
 | `skyseal` | ORCID、Passkey公開鍵、承認トランザクション、公開証拠 | Googleサービスアカウント鍵、Drive名・ID |
 | iPhone/iPad | Passkey、承認操作 | Drive/GitHubの長期トークン |
 | VPS公開領域/GitHub | ハッシュ、署名、本人登録証明、OTS証明 | 原ファイル、名前、パス、Drive ID、対応表 |
@@ -142,10 +151,16 @@ flowchart TD
    非公開台帳が有効な場合だけ、処理単位のroot名を別のmetadata要求で取得する。
 3. スナップショットが120秒変化しなければハッシュを計算する。
 4. 計算後にDriveを再観測し、途中変更があれば破棄して安定待ちへ戻す。
-5. `skyseal-sha256-set-v1`形式のハッシュ一覧はagent内に保持し、その一覧自体のダイジェストと
-   件数だけを公開サービスへ送り、15分有効の承認トランザクションを作る。
-6. ORCIDログイン済みPWAには、Seal ID、時刻、ハッシュ件数、状態だけを表示する。
-7. 利用者が対象を選び、iPhone/iPadのPasskeyで明示的に承認する。
+5. JMAから直近の10分間隔のひまわりBand 13画像を取得する。日ごとに再利用されるHHMM形式の
+   URLなので、`Last-Modified`の日付・時刻、JPEG形式、上限サイズを検証する。
+6. `skyseal-sha256-set-v1`形式のハッシュ一覧はagent内に保持し、その一覧自体のダイジェスト、
+   件数、ひまわり画像SHA-256と公開観測メタデータを公開サービスへ送り、15分有効の承認
+   トランザクションを作る。
+7. ORCIDログイン済みPWAには、Seal ID、時刻、ハッシュ件数、ひまわり観測時刻、状態を表示する。
+8. 利用者が対象を選び、iPhone/iPadのPasskeyで明示的に承認する。
+
+JMA画像を現在の観測枠として検証できない回はsealを作らず、次のtimerで再試行する。
+`SKYSEAL_SKY_WITNESS_MODE=required`が本番値であり、設定検査は`off`を拒否する。
 
 承認画面には原ファイル、ファイル名、Drive上のパスを送らない。このため、複数候補がある場合は
 Seal ID、到着時刻、ハッシュ件数で選ぶ。
@@ -190,7 +205,7 @@ GitHubが失敗してもVPS公開は取り消さない。ジョブの`github_sta
 | Google Drive `SkySeal Inbox` | 原ファイル、名前、フォルダ | Google Driveの共有設定 |
 | Google Sheet `SkySeal Private Ledger` | root名・Driveリンク/ID・Seal ID・公開URL・監査receipt | 所有者と明示共有したservice accountのみ |
 | `/var/lib/skyseal/skyseal.sqlite3` | ORCID、セッション、Passkeyルーティング情報、公開鍵、承認トランザクション、agent tokenのハッシュ | `skyseal:skyseal`, 600 |
-| `/var/lib/skyseal-agent/drive-agent.sqlite3` | Drive ID、snapshot、hash list、private bearer、成果物、GitHub同期状態 | `skyseal-agent:skyseal-agent`, 600 |
+| `/var/lib/skyseal-agent/drive-agent.sqlite3` | Drive ID、snapshot、hash list、private bearer、ひまわり画像、成果物、GitHub同期状態 | `skyseal-agent:skyseal-agent`, 600 |
 | `/var/lib/skyseal-agent/work` | OTS・検証用の短命な作業ファイル | 非公開、処理後削除 |
 | `/var/lib/skyseal-public/index.json` | 公開証拠一覧とGitHub同期状態 | 公開 |
 | `/var/lib/skyseal-public/evidence/YYYY/MM/<seal-id>/` | 完全な公開証拠 | 公開、dirs 755/files 644 |
@@ -205,7 +220,7 @@ SQLiteはWAL modeなので、稼働中は`-wal`と`-shm`が見えることがあ
 sudo sh -c 'ls -l /var/lib/skyseal/skyseal.sqlite3*'
 ```
 
-### 公開される7ファイル
+### 公開されるファイル
 
 ```text
 evidence/YYYY/MM/<seal-id>/
@@ -215,10 +230,13 @@ evidence/YYYY/MM/<seal-id>/
   identity-genesis.json
   identity-activation.json
   identity-activation.json.ots
+  sky-witness.json
+  sky-witness.jpg
   manifest.json
 ```
 
-`manifest.json`は他の6ファイルのSHA-256と、どの`.ots`がどの対象をstampしたかを記録する。
+新規sealは9ファイル、既存のlegacy sealはsky-witness 2ファイルを含まない7ファイルで、どちらも
+検証可能である。`manifest.json`は他ファイルのSHA-256と、どの`.ots`がどの対象をstampしたかを記録する。
 検証時は一覧ページではなくmanifest、署名、trusted RP/origin、OTSを検査する。
 
 ### 所有者だけが見る対応台帳
@@ -609,7 +627,7 @@ ssh -t skyseal-proof 'sudo git -C /opt/skyseal rev-parse --short=12 HEAD'
 curl -fsS https://proof.excyberlab.net/proofs/ >/dev/null && echo OK
 ```
 
-公開証拠のあるSeal IDを一つ開き、7ファイルへのリンクとGitHub同期状態も確認する。
+公開証拠のある新規Seal IDを一つ開き、9ファイルへのリンク、ひまわり画像、GitHub同期状態も確認する。
 
 ## 11. 定期点検
 
@@ -666,6 +684,7 @@ sudo -u skyseal /opt/skyseal/.venv/bin/python -c \
 | `502`または`curl (7)`が再起動直後に一度出る | Python起動よりCaddy/確認が先行 | updaterが完了行まで進めば正常。停止したら`skyseal.service`ログを見る |
 | agentが`inactive (dead)` | oneshot実行後の通常状態の可能性 | `Result=success`, `ExecMainStatus=0`を確認 |
 | `OpenTimestamps operation failed` | OTS network/cache/calendar問題 | `XDG_CACHE_HOME`、DNS、時刻、journalを確認。承認済みjobは再実行可能 |
+| `no current JMA Himawari observation was accepted` | JMA未配信、通信障害、古いHHMM画像を安全に拒否 | 原ファイルjobは未作成なので次回timerを待つ。継続時はVPSからJMA HTTPS、DNS、システムUTCを確認し、`off`で回避しない |
 | `/nonexistent/.cache/ots` PermissionError | 古いunitまたは環境 | 最新unitの`XDG_CACHE_HOME=/var/lib/skyseal-agent/cache`を確認し`sudo skyseal-update` |
 | PWAに「承認トランザクションがありません」 | 古いPWA cache、期限切れ、対象選択消失 | Safariで再読込、最新asset確認、15分以内の新しいpendingを選択 |
 | GitHubだけ見えない | mirror失敗 | `/proofs/`でVPS証拠を確認。`github_status`とjournalを見る。自動再試行 |
@@ -812,7 +831,7 @@ GitHub ActionsにVPS SSH秘密鍵を置く自動deployは現在採用してい�
 - Drive agent: [`../drive_agent/README.md`](../drive_agent/README.md)
 - Phase 1 protocol: [`../spec/phase1-protocol.md`](../spec/phase1-protocol.md)
 - Phase 2 protocol: [`../spec/phase2-protocol.md`](../spec/phase2-protocol.md)
-- v1.1 normative core: [`../spec/v1.md`](../spec/v1.md)
+- v1.2 normative core: [`../spec/v1.md`](../spec/v1.md)
 - verifier: [`../verifier/README.md`](../verifier/README.md)
 
 この文書、`deploy/production-profile.json`、本番VPSの`sudo skyseal-update`完了commitの三つを

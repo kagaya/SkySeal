@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS seals (
     subject_digest TEXT NOT NULL,
     entry_count INTEGER NOT NULL,
     private_ledger_commitment TEXT,
+    sky_witness_json BLOB,
     source TEXT NOT NULL DEFAULT 'interactive' CHECK (source IN ('interactive', 'drive_agent')),
     status TEXT NOT NULL CHECK (
         status IN ('pending', 'awaiting_assertion', 'approved', 'expired', 'rejected', 'invalidated')
@@ -145,6 +146,8 @@ class Store:
                     connection.execute(
                         "ALTER TABLE seals ADD COLUMN private_ledger_commitment TEXT"
                     )
+                if "sky_witness_json" not in seal_columns:
+                    connection.execute("ALTER TABLE seals ADD COLUMN sky_witness_json BLOB")
                 identity_columns = {
                     row["name"] for row in connection.execute("PRAGMA table_info(identities)")
                 }
@@ -517,6 +520,7 @@ class Store:
         entry_count: int,
         lifetime_seconds: int,
         private_ledger_commitment: str | None = None,
+        sky_witness_json: bytes | None = None,
         identity_id: str | None = None,
         source: str = "interactive",
     ) -> tuple[str, sqlite3.Row]:
@@ -527,9 +531,9 @@ class Store:
                 """
                 INSERT INTO seals
                 (seal_id, bearer_hash, commitment_format, subject_digest, entry_count,
-                 private_ledger_commitment, source, status, identity_id,
+                 private_ledger_commitment, sky_witness_json, source, status, identity_id,
                  created_at, expires_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
                 """,
                 (
                     seal_id,
@@ -538,6 +542,7 @@ class Store:
                     subject_digest,
                     entry_count,
                     private_ledger_commitment,
+                    sky_witness_json,
                     source,
                     identity_id,
                     now,
@@ -561,7 +566,8 @@ class Store:
             return list(
                 connection.execute(
                     """
-                    SELECT seal_id, entry_count, status, created_at, expires_at
+                    SELECT seal_id, entry_count, status, created_at, expires_at,
+                           sky_witness_json
                     FROM seals
                     WHERE identity_id = ? AND source = 'drive_agent'
                       AND status IN ('pending', 'awaiting_assertion')

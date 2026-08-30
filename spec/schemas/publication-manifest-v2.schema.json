@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:skyseal:schema:publication-manifest:v2",
-  "title": "SkySeal v1.1 publication manifest",
+  "title": "SkySeal v1.2 publication manifest",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "seal_id", "artifacts", "timestamp_targets"],
@@ -28,7 +28,13 @@
         "seal.skyseal.json.ots": {"$ref": "#/$defs/artifact"},
         "identity-genesis.json": {"$ref": "#/$defs/artifact"},
         "identity-activation.json": {"$ref": "#/$defs/artifact"},
-        "identity-activation.json.ots": {"$ref": "#/$defs/artifact"}
+        "identity-activation.json.ots": {"$ref": "#/$defs/artifact"},
+        "sky-witness.json": {"$ref": "#/$defs/artifact"},
+        "sky-witness.jpg": {"$ref": "#/$defs/artifact"}
+      },
+      "dependentRequired": {
+        "sky-witness.json": ["sky-witness.jpg"],
+        "sky-witness.jpg": ["sky-witness.json"]
       }
     },
     "timestamp_targets": {

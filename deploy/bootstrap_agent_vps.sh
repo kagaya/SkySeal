@@ -215,6 +215,7 @@ trap cleanup EXIT
   printf 'SKYSEAL_PUBLIC_ROOT=%s\n' "$PUBLIC_DIR"
   printf 'SKYSEAL_DRIVE_SETTLE_SECONDS=120\n'
   printf 'SKYSEAL_DRIVE_POLL_SECONDS=30\n'
+  printf 'SKYSEAL_SKY_WITNESS_MODE=required\n'
 } >"$ENVIRONMENT_FILE"
 install -o "$AGENT_USER" -g "$AGENT_GROUP" -m 0600 \
   "$ENVIRONMENT_FILE" "$CONFIG_DIR/agent.env"

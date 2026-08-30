@@ -2,7 +2,8 @@
 
 The agent watches one private Google Drive inbox, hashes stable sealing units,
 creates ORCID-bound approval requests, retrieves approved evidence, verifies it,
-stamps it with OpenTimestamps, persists an opaque package on the VPS, and then
+adds a recent JMA Himawari full-disk infrared observation, stamps the signed
+result with OpenTimestamps, persists an opaque package on the VPS, and then
 mirrors that package to GitHub. The
 original remains in Google Drive; bytes are streamed through the agent for
 hashing and are not persisted as source-file copies.
@@ -68,6 +69,13 @@ environment. A single pass is useful for systemd timers or cron:
 python3 drive_agent/agent.py run-once
 ```
 
+Production uses `SKYSEAL_SKY_WITNESS_MODE=required`. The agent selects a recent
+ten-minute Band 13 slot, verifies the dated HTTP `Last-Modified` header because
+JMA reuses HHMM URLs daily, checks the JPEG, and submits its metadata and image
+digest for Passkey approval. If no current observation is accepted, that pass
+creates no seal and the timer retries. `off` exists only for development and
+legacy operation; the production configuration check rejects it.
+
 The foreground worker polls continuously:
 
 ```bash
@@ -119,7 +127,7 @@ Run `upgrade` later to add confirmed Bitcoin paths to
 pending OTS proofs.
 
 The SQLite database and its WAL files are private state. Do not publish them.
-The public root contains only the seven manifest-controlled public artifacts
+The public root contains only manifest-controlled public artifacts
 and a discovery index; it must never receive raw Drive bytes.
 
 On the production Sakura VPS, use the automated deployment described in

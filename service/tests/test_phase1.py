@@ -33,6 +33,23 @@ RP_ID = "seal.example.org"
 ORIGIN = "https://seal.example.org"
 
 
+def sky_witness_fixture(image: bytes | None = None) -> dict[str, str]:
+    return {
+        "schema": "urn:skyseal:sky-witness:v1",
+        "provider": "Japan Meteorological Agency (JMA)",
+        "platform": "Himawari-8/9",
+        "product": "Full Disk Band 13 infrared",
+        "observation_time": "2026-08-30T01:20:00Z",
+        "retrieved_at": "2026-08-30T01:43:21Z",
+        "source_url": "https://www.data.jma.go.jp/mscweb/data/himawari/img/fd_/fd__b13_0120.jpg",
+        "media_type": "image/jpeg",
+        "image_digest": "sha256:" + (
+            hashlib.sha256(image).hexdigest() if image is not None else "c" * 64
+        ),
+        "attribution": "Japan Meteorological Agency (JMA)",
+    }
+
+
 def cbor_argument(major: int, value: int) -> bytes:
     if value < 24:
         return bytes([(major << 5) | value])
@@ -372,9 +389,9 @@ class Phase1FlowTests(unittest.TestCase):
         headers = dict(response.headers)
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         self.assertEqual(headers["X-Frame-Options"], "DENY")
-        self.assertIn(b'<script src="/app.js?v=4" defer></script>', response.body)
+        self.assertIn(b'<script src="/app.js?v=5" defer></script>', response.body)
         self.assertNotIn(b"<script>", response.body)
-        app_script = self.app.handle("GET", "/app.js?v=4")
+        app_script = self.app.handle("GET", "/app.js?v=5")
         self.assertEqual(app_script.status, 200)
         self.assertEqual(dict(app_script.headers)["Cache-Control"], "no-cache")
         self.assertIn(
@@ -384,15 +401,18 @@ class Phase1FlowTests(unittest.TestCase):
         self.assertNotIn(b"!state.sealId || !state.bearer", app_script.body)
         service_worker = self.app.handle("GET", "/sw.js")
         self.assertEqual(service_worker.status, 200)
-        self.assertIn(b'skyseal-pwa-v4', service_worker.body)
+        self.assertIn(b'skyseal-pwa-v5', service_worker.body)
         self.assertIn(b'fetch(event.request, {cache: "no-cache"})', service_worker.body)
 
     def test_drive_agent_creates_identity_inbox_transaction_without_public_source_metadata(self) -> None:
         self.enroll()
         self.activate_with_passkey()
         agent_token = self.app.store.create_agent_token(ORCID)
-        subject_digest = hashlib.sha256(b"private strict hash list\n").hexdigest()
+        hash_list = b"a" * 64 + b"\n" + b"b" * 64 + b"\n" + b"c" * 64 + b"\n"
+        subject_digest = hashlib.sha256(hash_list).hexdigest()
         ledger_commitment = "sha256:" + "a" * 64
+        sky_image = b"\xff\xd8" + b"sky" * 512 + b"\xff\xd9"
+        sky_witness = sky_witness_fixture(sky_image)
         created = self.app.handle(
             "POST",
             "/api/v1/seals",
@@ -406,6 +426,7 @@ class Phase1FlowTests(unittest.TestCase):
                     "subject_digest": subject_digest,
                     "entry_count": 3,
                     "private_ledger_commitment": ledger_commitment,
+                    "sky_witness": sky_witness,
                 },
                 separators=(",", ":"),
             ).encode(),
@@ -428,6 +449,7 @@ class Phase1FlowTests(unittest.TestCase):
                     "status": "pending",
                     "created_at": pending_object["seals"][0]["created_at"],
                     "expires_at": transaction["expires_at"],
+                    "sky_witness": sky_witness,
                 }
             ],
         )
@@ -511,6 +533,10 @@ class Phase1FlowTests(unittest.TestCase):
             response_json(agent_bundle)["seal_payload"]["private_ledger_commitment"],
             ledger_commitment,
         )
+        self.assertEqual(
+            response_json(agent_bundle)["seal_payload"]["sky_witness"],
+            sky_witness,
+        )
 
         compact = ORCID.rsplit("/", 1)[-1]
         activation = self.app.handle(
@@ -518,6 +544,39 @@ class Phase1FlowTests(unittest.TestCase):
         )
         self.assertEqual(activation.status, 200)
         self.assertIn(b"identity-activation:v1", activation.body)
+
+        genesis = self.app.handle("GET", f"/api/v1/identity/{compact}/genesis")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "hashes.txt").write_bytes(hash_list)
+            (root / "bundle.json").write_bytes(agent_bundle.body)
+            (root / "genesis.json").write_bytes(genesis.body)
+            (root / "activation.json").write_bytes(activation.body)
+            (root / "sky-witness.json").write_bytes(canonical_json(sky_witness) + b"\n")
+            (root / "sky-witness.jpg").write_bytes(sky_image)
+            report = verify_bundle(
+                root / "hashes.txt",
+                root / "bundle.json",
+                root / "genesis.json",
+                RP_ID,
+                ORIGIN,
+                root / "activation.json",
+                root / "sky-witness.json",
+                root / "sky-witness.jpg",
+            )
+            self.assertTrue(report["sky_witness"]["artifacts_checked"])
+            (root / "sky-witness.jpg").write_bytes(sky_image + b"tampered")
+            with self.assertRaisesRegex(VerificationError, "sky witness image"):
+                verify_bundle(
+                    root / "hashes.txt",
+                    root / "bundle.json",
+                    root / "genesis.json",
+                    RP_ID,
+                    ORIGIN,
+                    root / "activation.json",
+                    root / "sky-witness.json",
+                    root / "sky-witness.jpg",
+                )
 
         with self.app.store.connect() as connection:
             seal = connection.execute(

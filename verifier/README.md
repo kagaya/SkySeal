@@ -1,4 +1,4 @@
-# SkySeal v1.1 verifier
+# SkySeal v1.2 verifier
 
 This is the executable reference implementation for the normative core in
 [`../spec/v1.md`](../spec/v1.md). It never reads Google Drive and does not need
@@ -61,7 +61,7 @@ completed checks from checks not yet implemented.
 
 After downloading one complete `evidence/YYYY/MM/<seal-id>/` directory, verify
 its manifest, hash set, seal WebAuthn bundle, Passkey identity-activation proof,
-and both OTS proofs with:
+both OTS proofs and, when present, the signed Himawari metadata/image pair with:
 
 ```bash
 python3 verifier/skyseal_publication_verify.py ./evidence-directory \
@@ -72,6 +72,12 @@ python3 verifier/skyseal_publication_verify.py ./evidence-directory \
 Before Bitcoin confirmation, add `--allow-pending-ots` to verify every other
 layer while reporting each proof as `pending_or_unverified`. This option does
 not claim independent time evidence.
+
+For a sky-witness package, require `sky_witness.artifacts_checked` to be `true`.
+This proves the exact image digest was Passkey-approved. It does not authenticate
+JMA independently of HTTPS/provider trust and it does not prevent somebody from
+attaching a historical public image later; interpret the observation as physical
+context and a provider-dependent lower bound, not as a replacement for OTS.
 
 ## Owner-disclosed private receipt
 

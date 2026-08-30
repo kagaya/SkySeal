@@ -7,7 +7,7 @@
   <title>SkySeal Approval</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/styles.css">
-  <script src="/app.js?v=4" defer></script>
+  <script src="/app.js?v=5" defer></script>
 </head>
 <body>
   <main>
@@ -36,7 +36,7 @@
 
     <section id="pending-card" class="card hidden" aria-labelledby="pending-title">
       <h2 id="pending-title">Driveからの承認待ち</h2>
-      <p>公開側へファイル名を渡さないため、到着時刻とハッシュ件数だけを表示します。</p>
+      <p>公開側へファイル名を渡さず、到着時刻、ハッシュ件数、ひまわり観測時刻を表示します。</p>
       <div id="pending-list" class="pending-list"></div>
     </section>
 
@@ -46,6 +46,7 @@
       <dl>
         <div><dt>Seal ID</dt><dd id="seal-id"></dd></div>
         <div><dt>確認コード</dt><dd id="confirmation-code">承認開始後に表示</dd></div>
+        <div id="sky-witness-row" class="hidden"><dt>ひまわり観測</dt><dd id="sky-witness-time"></dd></div>
       </dl>
       <div id="approval-warning" class="warning hidden"></div>
       <button id="approve-seal">パスキーで承認</button>

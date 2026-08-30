@@ -33,6 +33,7 @@ ARTIFACT_NAMES = {
     "identity-activation.json",
     "identity-activation.json.ots",
 }
+SKY_WITNESS_ARTIFACT_NAMES = {"sky-witness.json", "sky-witness.jpg"}
 TIMESTAMP_TARGETS = {
     ("seal.skyseal.json.ots", "seal.skyseal.json"),
     ("identity-activation.json.ots", "identity-activation.json"),
@@ -71,9 +72,12 @@ def verify_manifest(directory: Path) -> dict[str, object]:
     if not isinstance(manifest["seal_id"], str) or UUID7_RE.fullmatch(manifest["seal_id"]) is None:
         raise VerificationError("publication manifest has an invalid seal ID")
     artifacts = manifest["artifacts"]
-    if not isinstance(artifacts, dict) or set(artifacts) != ARTIFACT_NAMES:
+    if not isinstance(artifacts, dict) or frozenset(artifacts) not in {
+        frozenset(ARTIFACT_NAMES),
+        frozenset(ARTIFACT_NAMES | SKY_WITNESS_ARTIFACT_NAMES),
+    }:
         raise VerificationError("publication manifest has an invalid artifact set")
-    for name in sorted(ARTIFACT_NAMES):
+    for name in sorted(artifacts):
         record = artifacts[name]
         if not isinstance(record, dict) or set(record) != {"sha256"}:
             raise VerificationError(f"invalid artifact record: {name}")
@@ -132,6 +136,8 @@ def verify_publication(
         trusted_rp_id,
         trusted_origin,
         directory / "identity-activation.json",
+        directory / "sky-witness.json" if "sky-witness.json" in manifest["artifacts"] else None,
+        directory / "sky-witness.jpg" if "sky-witness.jpg" in manifest["artifacts"] else None,
     )
     if bundle_report["seal_id"] != manifest["seal_id"]:
         raise VerificationError("publication manifest and bundle seal IDs differ")
@@ -147,6 +153,7 @@ def verify_publication(
         "entry_count": bundle_report["entry_count"],
         "identity_id": bundle_report["identity_id"],
         "identity_activation": "ORCID OAuth + User-Verified Passkey",
+        "sky_witness": bundle_report.get("sky_witness"),
         "opentimestamps": timestamp_status,
     }
 

@@ -385,6 +385,10 @@ class PublicationWorker:
         self.local = local
         self.github = github
 
+    @staticmethod
+    def _optional(job: Mapping[str, object], name: str) -> object | None:
+        return job[name] if name in job.keys() else None
+
     def _verified_base(self, job: Mapping[str, object]) -> tuple[str, dict[str, bytes]]:
         required = {
             "hash_list": job["hash_list"],
@@ -411,6 +415,15 @@ class PublicationWorker:
             raise PublicationError("approved bundle has an invalid creation timestamp")
         if seal_id != job["seal_id"]:
             raise PublicationError("approved bundle seal ID does not match the job")
+        witness_json = self._optional(job, "sky_witness_json")
+        witness_image = self._optional(job, "sky_witness_image")
+        if "sky_witness" in payload:
+            if witness_json is None or witness_image is None:
+                raise PublicationError("signed sky witness artifacts are missing")
+            artifacts["sky-witness.json"] = bytes(witness_json)
+            artifacts["sky-witness.jpg"] = bytes(witness_image)
+        elif witness_json is not None or witness_image is not None:
+            raise PublicationError("unsigned sky witness artifacts are forbidden")
         year, month = created_at[:4], created_at[5:7]
         if not year.isdigit() or not month.isdigit():
             raise PublicationError("approved bundle has an invalid creation timestamp")
@@ -426,6 +439,13 @@ class PublicationWorker:
             bundle_path.write_bytes(artifacts["seal.skyseal.json"])
             genesis_path.write_bytes(artifacts["identity-genesis.json"])
             activation_path.write_bytes(artifacts["identity-activation.json"])
+            witness_path = None
+            witness_image_path = None
+            if "sky-witness.json" in artifacts:
+                witness_path = root / "sky-witness.json"
+                witness_image_path = root / "sky-witness.jpg"
+                witness_path.write_bytes(artifacts["sky-witness.json"])
+                witness_image_path.write_bytes(artifacts["sky-witness.jpg"])
             verify_bundle(
                 hash_path,
                 bundle_path,
@@ -433,6 +453,8 @@ class PublicationWorker:
                 self.trusted_rp_id,
                 self.trusted_origin,
                 activation_path,
+                witness_path,
+                witness_image_path,
             )
             verify_identity_activation(
                 genesis_path,

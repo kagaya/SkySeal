@@ -73,6 +73,7 @@ class AgentConfig:
     github_prefix: str = "evidence"
     settle_seconds: int = 120
     poll_seconds: int = 30
+    sky_witness_mode: str = "required"
 
     def __post_init__(self) -> None:
         exact_https_origin(self.skyseal_server)
@@ -107,6 +108,8 @@ class AgentConfig:
             raise ConfigurationError("invalid GitHub evidence prefix")
         if self.settle_seconds < 0 or self.poll_seconds < 1:
             raise ConfigurationError("invalid polling interval")
+        if self.sky_witness_mode not in {"required", "off"}:
+            raise ConfigurationError("SKYSEAL_SKY_WITNESS_MODE must be required or off")
 
     @classmethod
     def from_environment(cls) -> "AgentConfig":
@@ -151,4 +154,5 @@ class AgentConfig:
             github_prefix=os.getenv("SKYSEAL_GITHUB_PREFIX", "evidence").strip("/"),
             settle_seconds=int(os.getenv("SKYSEAL_DRIVE_SETTLE_SECONDS", "120")),
             poll_seconds=int(os.getenv("SKYSEAL_DRIVE_POLL_SECONDS", "30")),
+            sky_witness_mode=os.getenv("SKYSEAL_SKY_WITNESS_MODE", "required").strip(),
         )

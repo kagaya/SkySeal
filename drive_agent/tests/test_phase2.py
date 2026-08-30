@@ -5,6 +5,8 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
+from email.message import Message
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,6 +28,7 @@ from drive_agent.publication import (
 )
 from drive_agent.private_ledger import GoogleSheetsPrivateLedger, build_receipt
 from drive_agent.skyseal import SealTransaction
+from drive_agent.sky_witness import JMAHimawariWitness, SkyWitnessError, SkyWitnessRecord
 from drive_agent.state import AgentStore
 
 
@@ -85,10 +88,17 @@ class FakeSkySeal:
     def __init__(self):
         self.hash_lists: list[bytes] = []
         self.ledger_commitments: list[str | None] = []
+        self.sky_witnesses: list[dict[str, object] | None] = []
 
-    def create(self, hash_list: bytes, ledger_commitment: str | None = None) -> SealTransaction:
+    def create(
+        self,
+        hash_list: bytes,
+        ledger_commitment: str | None = None,
+        sky_witness: dict[str, object] | None = None,
+    ) -> SealTransaction:
         self.hash_lists.append(hash_list)
         self.ledger_commitments.append(ledger_commitment)
+        self.sky_witnesses.append(sky_witness)
         number = len(self.hash_lists)
         return SealTransaction(
             seal_id=f"018f0000-0000-7000-8000-{number:012d}",
@@ -169,6 +179,88 @@ class AgentScanTests(unittest.TestCase):
             self.assertEqual(len(second), 1)
             self.assertEqual(len(skyseal.hash_lists), 2)
             self.assertEqual(second[0]["entry_count"], 2)
+
+    def test_sky_witness_is_sent_for_signing_and_kept_for_publication(self) -> None:
+        metadata = {
+            "schema": "urn:skyseal:sky-witness:v1",
+            "provider": "Japan Meteorological Agency (JMA)",
+            "platform": "Himawari-8/9",
+            "product": "Full Disk Band 13 infrared",
+            "observation_time": "2026-08-30T01:20:00Z",
+            "retrieved_at": "2026-08-30T01:43:21Z",
+            "source_url": "https://www.data.jma.go.jp/mscweb/data/himawari/img/fd_/fd__b13_0120.jpg",
+            "media_type": "image/jpeg",
+            "image_digest": "sha256:" + "c" * 64,
+            "attribution": "Japan Meteorological Agency (JMA)",
+        }
+
+        class FakeWitness:
+            def capture(self, now=None):
+                return SkyWitnessRecord(metadata, b"private-test-image")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = AgentConfig(
+                database_path=root / "agent.sqlite3",
+                work_directory=root / "work",
+                public_root=root / "public",
+                google_service_account_file=root / "unused-google.json",
+                drive_folder_id="private-inbox-id",
+                skyseal_server="https://seal.example.org",
+                skyseal_rp_id="seal.example.org",
+                skyseal_agent_token_file=root / "unused-agent-token",
+                github_owner="kagaya",
+                github_repository="SkySeal",
+                github_token_file=root / "unused-github-token",
+                settle_seconds=0,
+            )
+            store = AgentStore(config.database_path)
+            store.initialize()
+            skyseal = FakeSkySeal()
+            runtime = AgentRuntime(
+                config, FakeDrive(), skyseal, FakePublisher(), store, None, FakeWitness()
+            )
+            submitted = runtime.scan(now=1_788_073_600)
+            job = store.get_job(submitted[0]["seal_id"])
+            self.assertEqual(skyseal.sky_witnesses, [metadata])
+            self.assertEqual(json.loads(bytes(job["sky_witness_json"])), metadata)
+            self.assertEqual(bytes(job["sky_witness_image"]), b"private-test-image")
+
+
+class SkyWitnessCaptureTests(unittest.TestCase):
+    class Response:
+        def __init__(self, image: bytes, last_modified: str):
+            self.image = image
+            self.headers = Message()
+            self.headers["Content-Type"] = "image/jpeg"
+            self.headers["Last-Modified"] = last_modified
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, limit: int) -> bytes:
+            return self.image
+
+    def test_capture_accepts_current_slot_and_hashes_exact_jpeg(self) -> None:
+        image = b"\xff\xd8" + b"x" * 2048 + b"\xff\xd9"
+        response = self.Response(image, "Sun, 30 Aug 2026 01:23:00 GMT")
+        witness = JMAHimawariWitness(opener=lambda request, timeout: response, attempts=1)
+        result = witness.capture(datetime(2026, 8, 30, 1, 43, 21, tzinfo=timezone.utc))
+        self.assertEqual(result.image, image)
+        self.assertEqual(result.metadata["observation_time"], "2026-08-30T01:20:00Z")
+        self.assertEqual(
+            result.metadata["image_digest"], "sha256:" + hashlib.sha256(image).hexdigest()
+        )
+
+    def test_capture_rejects_reused_url_from_previous_day(self) -> None:
+        image = b"\xff\xd8" + b"x" * 2048 + b"\xff\xd9"
+        response = self.Response(image, "Sat, 29 Aug 2026 01:23:00 GMT")
+        witness = JMAHimawariWitness(opener=lambda request, timeout: response, attempts=1)
+        with self.assertRaisesRegex(SkyWitnessError, "does not match"):
+            witness.capture(datetime(2026, 8, 30, 1, 43, 21, tzinfo=timezone.utc))
 
     def test_private_ledger_receipt_is_committed_without_leaking_into_events(self) -> None:
         class FakeLedger:

@@ -14,6 +14,7 @@ from verifier.skyseal_verify import (
     parse_hash_list,
     parse_json_bytes,
     validate_orcid,
+    validate_sky_witness,
     verify_bundle,
 )
 
@@ -53,6 +54,26 @@ class IdentityTests(unittest.TestCase):
     def test_invalid_orcid_check_digit(self) -> None:
         with self.assertRaisesRegex(VerificationError, "check digit"):
             validate_orcid("https://orcid.org/0000-0000-0000-0002", "test")
+
+
+class SkyWitnessTests(unittest.TestCase):
+    def test_strict_jma_observation_metadata(self) -> None:
+        witness = {
+            "schema": "urn:skyseal:sky-witness:v1",
+            "provider": "Japan Meteorological Agency (JMA)",
+            "platform": "Himawari-8/9",
+            "product": "Full Disk Band 13 infrared",
+            "observation_time": "2026-08-30T01:20:00Z",
+            "retrieved_at": "2026-08-30T01:43:21Z",
+            "source_url": "https://www.data.jma.go.jp/mscweb/data/himawari/img/fd_/fd__b13_0120.jpg",
+            "media_type": "image/jpeg",
+            "image_digest": "sha256:" + "a" * 64,
+            "attribution": "Japan Meteorological Agency (JMA)",
+        }
+        self.assertEqual(validate_sky_witness(witness), witness)
+        witness["source_url"] = witness["source_url"].replace("0120", "0130")
+        with self.assertRaisesRegex(VerificationError, "does not match"):
+            validate_sky_witness(witness)
 
 
 class HashListTests(unittest.TestCase):

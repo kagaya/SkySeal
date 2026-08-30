@@ -45,7 +45,7 @@ python3 service/app.py
 
 Then open `http://localhost:8787/api/v1/orcid/mock`. Development bundles use an
 HTTP origin, may visibly bypass identity activation, and are not publishable
-v1.1 evidence.
+v1.2 evidence.
 
 ## Initial ORCID and Passkey activation
 
