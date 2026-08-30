@@ -6,15 +6,16 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-User=skyseal
-Group=skyseal
+User=skyseal-agent
+Group=skyseal-agent
 WorkingDirectory=/opt/skyseal
-EnvironmentFile=/etc/skyseal/agent.env
-StateDirectory=skyseal
+EnvironmentFile=/etc/skyseal-agent/agent.env
+Environment=PATH=/opt/skyseal/.venv-agent/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+StateDirectory=skyseal-agent
 StateDirectoryMode=0700
 UMask=0077
-ExecStartPre=/opt/skyseal/.venv/bin/python /opt/skyseal/deploy/check_config.py agent
-ExecStart=/usr/bin/flock --wait 600 /var/lib/skyseal/drive-agent.lock /opt/skyseal/.venv/bin/python /opt/skyseal/drive_agent/agent.py upgrade
+ExecStartPre=/opt/skyseal/.venv-agent/bin/python /opt/skyseal/deploy/check_config.py agent
+ExecStart=/usr/bin/flock --wait 600 /var/lib/skyseal-agent/drive-agent.lock /opt/skyseal/.venv-agent/bin/python /opt/skyseal/drive_agent/agent.py upgrade
 
 NoNewPrivileges=true
 PrivateDevices=true
@@ -33,4 +34,4 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/var/lib/skyseal
+ReadWritePaths=/var/lib/skyseal-agent

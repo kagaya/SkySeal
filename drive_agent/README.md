@@ -2,10 +2,27 @@
 
 The agent watches one private Google Drive inbox, hashes stable sealing units,
 creates ORCID-bound approval requests, retrieves approved evidence, verifies it,
-stamps it with OpenTimestamps, and publishes an opaque package to GitHub.
+stamps it with OpenTimestamps, and publishes an opaque package to GitHub. The
+original remains in Google Drive; bytes are streamed through the agent for
+hashing and are not persisted as source-file copies.
 
 It never requests the Drive `name` field. Its logs use a domain-separated hash
 of the private Drive unit ID. Read `spec/phase2-protocol.md` before deployment.
+
+## Placement and trust
+
+For always-on iPhone/iPad uploads, the agent may run on the same Sakura VPS as
+the public service. Use the separate `skyseal-agent` Unix account and private
+directories installed by `deploy/bootstrap_agent_vps.sh`. The public Web
+process then cannot read the agent credentials through ordinary Unix file
+permissions.
+
+This convenience expands the VPS trust boundary: compromise of the host or its
+root account could expose bytes readable through the dedicated Drive service
+account. Limit that account to Viewer access on `SkySeal Inbox`; never grant
+domain-wide delegation or access to the rest of Drive. A separate trusted
+Ubuntu host remains the stronger-isolation alternative. WSL is suitable for
+manual or delayed processing but does not run while Windows/WSL is stopped.
 
 ## Prerequisites
 
@@ -16,7 +33,8 @@ of the private Drive unit ID. Read `spec/phase2-protocol.md` before deployment.
    viewer. Do not enable domain-wide delegation.
 4. Create a fine-grained GitHub token restricted to the evidence repository
    with `Contents: write`.
-5. Install the `ots` command and Python dependencies:
+5. Install Python dependencies; `opentimestamps-client` supplies the `ots`
+   command:
 
    ```bash
    python3 -m pip install -r verifier/requirements.txt
@@ -69,3 +87,6 @@ publishes the package. Run `upgrade` later to add confirmed Bitcoin paths to
 pending OTS proofs.
 
 The SQLite database and its WAL files are private state. Do not publish them.
+
+On the production Sakura VPS, use the automated deployment described in
+`deploy/README.ja.md` instead of performing these steps individually.

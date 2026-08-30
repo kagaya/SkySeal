@@ -2,16 +2,24 @@
 
 ## 標準構成
 
-公開署名サービスと、Google Drive のファイル本文を読むエージェントを別ホストにする。
+標準運用では、公開署名サービスとGoogle Driveエージェントを同じ常時稼働VPSへ置く。
+ただし別Linuxユーザーと秘密ディレクトリで分離する。原ファイルの正本はGoogle Driveに
+残り、エージェントはハッシュ計算時に内容をストリームで読むだけで、原ファイルの複製を
+VPSディスクへ保存しない。
 
 | ホスト | 保持・処理するもの | 保持しないもの |
 |---|---|---|
-| 公開 Linux VPS | ORCID iD、Passkey 公開鍵、本人登録証明、ハッシュ、署名証明、SQLite | Drive のファイル本文・ファイル名、Passkey 秘密鍵 |
-| 信頼できる Ubuntu 機 | Drive から取得した一時バイト列、非公開エージェント状態、API 秘密情報 | Passkey 秘密鍵、恒久的な原ファイル複製 |
+| 公開 Linux VPS (`skyseal`) | ORCID iD、Passkey 公開鍵、本人登録証明、ハッシュ、署名証明、SQLite | Drive API鍵、Driveのファイル名、Passkey秘密鍵 |
+| 同一VPSのエージェント (`skyseal-agent`) | Driveからストリーム取得した一時バイト列、非公開処理状態、専用API秘密情報 | Passkey秘密鍵、恒久的な原ファイル複製、ファイル名 |
 | iPhone / iPad | Passkey と利用者の承認操作 | Drive/GitHub の長期 API トークン |
 
 Drive エージェントから公開サービスへ送るのは、厳格形式のハッシュ一覧と件数だけである。
 ファイル名、Drive ID、フォルダ構造は送らない。
+
+同一VPS方式では、ホストまたはroot権限が侵害されると専用Inboxを読み取られる可能性がある。
+Googleサービスアカウントは `SkySeal Inbox` だけのViewerとし、Domain-wide delegationを
+禁止する。VPSも原ファイル内容を一切読めない境界が必要な場合だけ、エージェントを研究室の
+別Ubuntu機へ配置する。
 
 固定値は `deploy/production-profile.json` に機械可読形式でも記録している。WebAuthn登録後に
 originまたはRP IDを変更すると既存Passkeyが使えなくなるため、変更は新しい本人登録を伴う
@@ -120,33 +128,32 @@ curl -I https://proof.excyberlab.net/
 user handleは含まない。`identity-genesis.json` は任意で保管してよいが、OpenPGP署名や
 署名用PCは本番運用の必須条件ではない。
 
-## Drive エージェントホスト
+## 同一VPSへのDriveエージェント自動配置
 
-研究室内など、原データを読ませてよい常時稼働 Ubuntu 機にだけ配置する。WSL はスリープや
-ログアウトで停止し得るため、常時監視ホストにはしない。
+次の3秘密ファイルを一時配置してから、一つのスクリプトを実行する。
+
+- GoogleサービスアカウントJSON：`SkySeal Inbox` だけをViewer共有したアカウント
+- GitHub token：`kagaya/SkySeal` の `Contents: write` だけを持つ一行ファイル
+- Drive agent token：本人登録後にVPSで生成した一行ファイル
+
+入力ファイルは所有者以外が読めないmode 600または400にする。スクリプトは入力を
+`/etc/skyseal-agent` へmode 600でコピーするが、元ファイルは削除しない。
 
 ```bash
-sudo adduser --system --group --home /nonexistent --no-create-home skyseal
-sudo install -d -o root -g root -m 0755 /opt/skyseal
-sudo install -d -o skyseal -g skyseal -m 0700 /etc/skyseal
-sudo install -d -o skyseal -g skyseal -m 0700 /var/lib/skyseal
-sudo python3 -m venv /opt/skyseal/.venv
-sudo /opt/skyseal/.venv/bin/pip install -r /opt/skyseal/verifier/requirements.txt
-sudo /opt/skyseal/.venv/bin/pip install -r /opt/skyseal/drive_agent/requirements.txt
-sudo install -o skyseal -g skyseal -m 0600 \
-  /opt/skyseal/drive_agent/env.example /etc/skyseal/agent.env
-sudoedit /etc/skyseal/agent.env
+sudo bash /opt/skyseal/deploy/bootstrap_agent_vps.sh --google-key /path/to/google-service-account.json --github-token /path/to/github.token --agent-token /var/lib/skyseal/drive-agent.token.export --drive-folder-id DRIVE_FOLDER_ID
 ```
 
-OS パッケージとして `flock` と OpenTimestamps の `ots` command を用意する。
-次の3ファイルを `/etc/skyseal` に配置する。
+このスクリプトは次をまとめて行う。
 
-- `google-service-account.json`（600）
-- `github.token`（1行、600）
-- `drive-agent.token`（1行、600）
+1. 専用Linuxユーザー `skyseal-agent` とmode 700の設定・状態ディレクトリを作る。
+2. 公開サービスとは別のPython仮想環境へDrive APIとOpenTimestampsを導入する。
+3. 秘密ファイルと固定設定をmode 600で配置する。
+4. systemd sandbox設定を検査し、初回Drive scanを実行する。
+5. 1分ごとの監視timerと毎日のOpenTimestamps upgrade timerを有効化する。
 
-3秘密ファイルは `skyseal:skyseal` 所有、mode 600 にする。専用ユーザー以外へ
-読み取り権限を与えない。
+公開Webサービスの `skyseal` ユーザーは `/etc/skyseal-agent` を読めない。systemdサービスは
+原ファイルを書き出せる場所を持たず、非公開SQLiteと作業領域だけを
+`/var/lib/skyseal-agent` に保持する。
 
 Drive agent token は、本人登録を有効化した後、公開サービスホストで一度だけ生成する。
 
@@ -158,22 +165,8 @@ sudo -u skyseal /opt/skyseal/.venv/bin/python \
   --output /var/lib/skyseal/drive-agent.token.export
 ```
 
-この export ファイルを安全な手段でエージェントホストの
-`/etc/skyseal/drive-agent.token` へ一度だけ転送し、`skyseal:skyseal`、mode 600 にする。
-転送確認後、公開サービスホスト上の export ファイルは削除する。
-`agent.env` の公開ホスト名とRP IDは `proof.excyberlab.net` に固定済みである。
-Drive folder ID を実値にする。
-
-```bash
-sudo cp /opt/skyseal/deploy/skyseal-drive-agent.service /etc/systemd/system/
-sudo cp /opt/skyseal/deploy/skyseal-drive-agent.timer /etc/systemd/system/
-sudo cp /opt/skyseal/deploy/skyseal-ots-upgrade.service /etc/systemd/system/
-sudo cp /opt/skyseal/deploy/skyseal-ots-upgrade.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl start skyseal-drive-agent.service
-sudo journalctl -u skyseal-drive-agent.service --no-pager
-sudo systemctl enable --now skyseal-drive-agent.timer skyseal-ots-upgrade.timer
-```
+自動配置の成功後、最終配置ファイルと一致することを確認してから、一時配置した秘密ファイルと
+`/var/lib/skyseal/drive-agent.token.export` を削除する。
 
 ## Phase 4 受入試験
 
