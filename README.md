@@ -12,6 +12,8 @@ a time stamp system
 - [Private Google Drive agent](drive_agent/README.md)
 - [Complete publication verifier](verifier/skyseal_publication_verify.py)
 - [Phase 3 production deployment runbook (Japanese)](deploy/README.ja.md)
+- [Production architecture, operations, and cross-platform maintenance manual
+  (Japanese)](docs/operations-and-maintenance.ja.md)
 - `deploy/bootstrap_agent_vps.sh`: one-command isolated Drive-agent setup on
   the always-on production VPS
 - `sudo skyseal-update`: one-command production updates with database backups,

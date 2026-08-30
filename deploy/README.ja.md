@@ -1,5 +1,10 @@
 # SkySeal 本番配置手順（Phase 3）
 
+本番構成を短時間で思い出すための要約、Windows/macOS/Linuxの管理端末設定、定常更新、
+障害対応、バックアップ、秘密情報の境界は
+[`../docs/operations-and-maintenance.ja.md`](../docs/operations-and-maintenance.ja.md)を参照する。
+この文書は主に初回構築と受入試験を扱う。
+
 ## 標準構成
 
 標準運用では、公開署名サービスとGoogle Driveエージェントを同じ常時稼働VPSへ置く。
