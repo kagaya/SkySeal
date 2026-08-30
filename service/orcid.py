@@ -67,7 +67,7 @@ def exchange_authorization_code(
         headers={
             "Accept": "application/json",
             "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "SkySeal/1.0",
+            "User-Agent": "SkySeal/1.1",
         },
     )
     try:

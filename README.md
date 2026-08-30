@@ -1,10 +1,10 @@
 # SkySeal
 a time stamp system
 
-## SkySeal v1 development
+## SkySeal v1.1 development
 
 - [Normative v1 core](spec/v1.md)
-- [Offline Phase 0 verifier](verifier/README.md)
+- [Offline v1.1 verifier](verifier/README.md)
 - `make_public_hashlist_v1.sh`: strict v1 hash-set creator
 - [Phase 1 ORCID/passkey service](service/README.md)
 - [Phase 1 PC client](cli/skyseal_pc.py)
@@ -18,7 +18,8 @@ by the v1 work.
 
 ## Selected production deployment profile
 
-The root domain is registered; DNS and hosting are pending. The fixed production identifiers are:
+The root domain, DNS, VPS, HTTPS service, ORCID OAuth, and first iPhone Passkey
+registration are configured. The fixed production identifiers are:
 
 - root domain: `excyberlab.net`
 - WebAuthn origin and PWA: `https://proof.excyberlab.net`

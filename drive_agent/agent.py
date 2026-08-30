@@ -91,7 +91,7 @@ class AgentRuntime:
                     job["seal_id"],
                     bundle_json=artifacts.bundle_json,
                     genesis_json=artifacts.genesis_json,
-                    genesis_signature=artifacts.genesis_signature,
+                    identity_activation=artifacts.identity_activation,
                 )
                 events.append({"seal_id": job["seal_id"], "event": "approved"})
             elif status in {"expired", "rejected", "invalidated"}:
@@ -99,10 +99,10 @@ class AgentRuntime:
                 events.append({"seal_id": job["seal_id"], "event": status})
 
         for job in self.store.jobs_with_status("approved"):
-            if job["ots_proof"] is None or job["genesis_ots_proof"] is None:
+            if job["ots_proof"] is None or job["identity_ots_proof"] is None:
                 stamped = self.publisher.stamp(job)
                 self.store.store_timestamp_proofs(
-                    job["seal_id"], stamped.bundle_ots, stamped.genesis_ots
+                    job["seal_id"], stamped.bundle_ots, stamped.activation_ots
                 )
                 job = self.store.get_job(job["seal_id"])
                 if job is None:
@@ -111,7 +111,7 @@ class AgentRuntime:
             self.store.mark_published(
                 job["seal_id"],
                 result.bundle_ots,
-                result.genesis_ots,
+                result.activation_ots,
                 result.prefix,
             )
             events.append({"seal_id": job["seal_id"], "event": "published"})
@@ -122,7 +122,7 @@ class AgentRuntime:
         for job in self.store.jobs_with_status("published"):
             result = self.publisher.upgrade(job)
             self.store.update_ots_proofs(
-                job["seal_id"], result.bundle_ots, result.genesis_ots
+                job["seal_id"], result.bundle_ots, result.activation_ots
             )
             events.append({"seal_id": job["seal_id"], "event": "timestamps_upgraded"})
         return events
@@ -147,7 +147,6 @@ def build_runtime(config: AgentConfig) -> AgentRuntime:
     publisher = PublicationWorker(
         trusted_rp_id=config.skyseal_rp_id,
         trusted_origin=config.skyseal_server,
-        openpgp_public_key=config.openpgp_public_key,
         work_directory=config.work_directory,
         github_prefix=config.github_prefix,
         ots=OpenTimestampsClient(),

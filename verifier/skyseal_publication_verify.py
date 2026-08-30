@@ -15,8 +15,6 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 if str(REPOSITORY) not in sys.path:
     sys.path.insert(0, str(REPOSITORY))
 
-from service.bootstrap_identity import verify_signature  # noqa: E402
-from service.config import PINNED_OPENPGP_FINGERPRINT  # noqa: E402
 from verifier.skyseal_verify import (  # noqa: E402
     DIGEST_RE,
     UUID7_RE,
@@ -26,18 +24,18 @@ from verifier.skyseal_verify import (  # noqa: E402
 )
 
 
-SCHEMA = "urn:skyseal:publication-manifest:v1"
+SCHEMA = "urn:skyseal:publication-manifest:v2"
 ARTIFACT_NAMES = {
     "hashes.txt",
     "seal.skyseal.json",
     "seal.skyseal.json.ots",
     "identity-genesis.json",
-    "identity-genesis.json.asc",
-    "identity-genesis.json.asc.ots",
+    "identity-activation.json",
+    "identity-activation.json.ots",
 }
 TIMESTAMP_TARGETS = {
     ("seal.skyseal.json.ots", "seal.skyseal.json"),
-    ("identity-genesis.json.asc.ots", "identity-genesis.json.asc"),
+    ("identity-activation.json.ots", "identity-activation.json"),
 }
 
 
@@ -117,10 +115,8 @@ def default_ots_verify(directory: Path, proof_name: str, executable: str) -> boo
 def verify_publication(
     directory: Path,
     *,
-    public_key: Path,
     trusted_rp_id: str,
     trusted_origin: str,
-    fingerprint: str = PINNED_OPENPGP_FINGERPRINT,
     ots_executable: str = "ots",
     ots_verify: Callable[[Path, str, str], bool] = default_ots_verify,
     allow_pending_ots: bool = False,
@@ -135,15 +131,10 @@ def verify_publication(
         directory / "identity-genesis.json",
         trusted_rp_id,
         trusted_origin,
+        directory / "identity-activation.json",
     )
     if bundle_report["seal_id"] != manifest["seal_id"]:
         raise VerificationError("publication manifest and bundle seal IDs differ")
-    verify_signature(
-        (directory / "identity-genesis.json").read_bytes(),
-        directory / "identity-genesis.json.asc",
-        public_key,
-        fingerprint,
-    )
     timestamp_status = {}
     for proof_name, _ in sorted(TIMESTAMP_TARGETS):
         confirmed = ots_verify(directory, proof_name, ots_executable)
@@ -155,7 +146,7 @@ def verify_publication(
         "seal_id": manifest["seal_id"],
         "entry_count": bundle_report["entry_count"],
         "identity_id": bundle_report["identity_id"],
-        "openpgp_fingerprint": fingerprint,
+        "identity_activation": "ORCID OAuth + User-Verified Passkey",
         "opentimestamps": timestamp_status,
     }
 
@@ -163,10 +154,8 @@ def verify_publication(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
-    parser.add_argument("--public-key", type=Path, required=True)
     parser.add_argument("--rp-id", required=True)
     parser.add_argument("--origin", required=True)
-    parser.add_argument("--fingerprint", default=PINNED_OPENPGP_FINGERPRINT)
     parser.add_argument("--ots", default="ots", help="OpenTimestamps executable")
     parser.add_argument("--allow-pending-ots", action="store_true")
     return parser
@@ -177,10 +166,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report = verify_publication(
             args.directory,
-            public_key=args.public_key,
             trusted_rp_id=args.rp_id,
             trusted_origin=args.origin,
-            fingerprint=args.fingerprint,
             ots_executable=args.ots,
             allow_pending_ots=args.allow_pending_ots,
         )

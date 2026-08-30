@@ -13,9 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from service.bootstrap_identity import verify_signature
-from service.config import PINNED_OPENPGP_FINGERPRINT
-from verifier.skyseal_verify import canonical_json, parse_json_bytes, verify_bundle
+from verifier.skyseal_verify import (
+    canonical_json,
+    parse_json_bytes,
+    verify_bundle,
+    verify_identity_activation,
+)
 
 
 class PublicationError(RuntimeError):
@@ -173,7 +176,7 @@ class GitHubPublisher:
 class PublicationResult:
     prefix: str
     bundle_ots: bytes
-    genesis_ots: bytes
+    activation_ots: bytes
 
 
 class PublicationWorker:
@@ -182,28 +185,24 @@ class PublicationWorker:
         *,
         trusted_rp_id: str,
         trusted_origin: str,
-        openpgp_public_key: Path,
         work_directory: Path,
         github_prefix: str,
         ots: OpenTimestampsClient,
         github: GitHubPublisher,
-        openpgp_fingerprint: str = PINNED_OPENPGP_FINGERPRINT,
     ):
         self.trusted_rp_id = trusted_rp_id
         self.trusted_origin = trusted_origin
-        self.openpgp_public_key = openpgp_public_key
         self.work_directory = work_directory
         self.github_prefix = github_prefix.strip("/")
         self.ots = ots
         self.github = github
-        self.openpgp_fingerprint = openpgp_fingerprint
 
     def _verified_base(self, job: Mapping[str, object]) -> tuple[str, dict[str, bytes]]:
         required = {
             "hash_list": job["hash_list"],
             "bundle_json": job["bundle_json"],
             "genesis_json": job["genesis_json"],
-            "genesis_signature": job["genesis_signature"],
+            "identity_activation": job["identity_activation"],
         }
         if any(value is None for value in required.values()):
             raise PublicationError("approved job is missing public artifacts")
@@ -211,7 +210,7 @@ class PublicationWorker:
             "hashes.txt": bytes(required["hash_list"]),
             "seal.skyseal.json": bytes(required["bundle_json"]),
             "identity-genesis.json": bytes(required["genesis_json"]),
-            "identity-genesis.json.asc": bytes(required["genesis_signature"]),
+            "identity-activation.json": bytes(required["identity_activation"]),
         }
         bundle_object = parse_json_bytes(artifacts["seal.skyseal.json"], "approved bundle")
         try:
@@ -234,30 +233,31 @@ class PublicationWorker:
             hash_path = root / "hashes.txt"
             bundle_path = root / "seal.skyseal.json"
             genesis_path = root / "identity-genesis.json"
-            signature_path = root / "identity-genesis.json.asc"
+            activation_path = root / "identity-activation.json"
             hash_path.write_bytes(artifacts["hashes.txt"])
             bundle_path.write_bytes(artifacts["seal.skyseal.json"])
             genesis_path.write_bytes(artifacts["identity-genesis.json"])
-            signature_path.write_bytes(artifacts["identity-genesis.json.asc"])
+            activation_path.write_bytes(artifacts["identity-activation.json"])
             verify_bundle(
                 hash_path,
                 bundle_path,
                 genesis_path,
                 self.trusted_rp_id,
                 self.trusted_origin,
+                activation_path,
             )
-            verify_signature(
-                artifacts["identity-genesis.json"],
-                signature_path,
-                self.openpgp_public_key,
-                self.openpgp_fingerprint,
+            verify_identity_activation(
+                genesis_path,
+                activation_path,
+                self.trusted_rp_id,
+                self.trusted_origin,
             )
         return prefix, artifacts
 
     @staticmethod
     def _manifest(seal_id: str, artifacts: Mapping[str, bytes]) -> bytes:
         manifest = {
-            "schema": "urn:skyseal:publication-manifest:v1",
+            "schema": "urn:skyseal:publication-manifest:v2",
             "seal_id": seal_id,
             "artifacts": {
                 name: {"sha256": sha256_prefixed(content)}
@@ -269,8 +269,8 @@ class PublicationWorker:
                     "target": "seal.skyseal.json",
                 },
                 {
-                    "proof": "identity-genesis.json.asc.ots",
-                    "target": "identity-genesis.json.asc",
+                    "proof": "identity-activation.json.ots",
+                    "target": "identity-activation.json",
                 },
             ],
         }
@@ -291,27 +291,27 @@ class PublicationWorker:
         bundle_ots = self.ots.stamp(
             "seal.skyseal.json", artifacts["seal.skyseal.json"], self.work_directory
         )
-        genesis_ots = self.ots.stamp(
-            "identity-genesis.json.asc",
-            artifacts["identity-genesis.json.asc"],
+        activation_ots = self.ots.stamp(
+            "identity-activation.json",
+            artifacts["identity-activation.json"],
             self.work_directory,
         )
-        return PublicationResult(prefix, bundle_ots, genesis_ots)
+        return PublicationResult(prefix, bundle_ots, activation_ots)
 
     def publish(self, job: Mapping[str, object]) -> PublicationResult:
         prefix, artifacts = self._verified_base(job)
-        if job["ots_proof"] is None or job["genesis_ots_proof"] is None:
+        if job["ots_proof"] is None or job["identity_ots_proof"] is None:
             raise PublicationError("approved job has not stored its timestamp proofs")
         bundle_ots = bytes(job["ots_proof"])
-        genesis_ots = bytes(job["genesis_ots_proof"])
+        activation_ots = bytes(job["identity_ots_proof"])
         artifacts["seal.skyseal.json.ots"] = bundle_ots
-        artifacts["identity-genesis.json.asc.ots"] = genesis_ots
+        artifacts["identity-activation.json.ots"] = activation_ots
         self._upload(prefix, artifacts, updating=False)
-        return PublicationResult(prefix, bundle_ots, genesis_ots)
+        return PublicationResult(prefix, bundle_ots, activation_ots)
 
     def upgrade(self, job: Mapping[str, object]) -> PublicationResult:
         prefix, artifacts = self._verified_base(job)
-        if job["ots_proof"] is None or job["genesis_ots_proof"] is None:
+        if job["ots_proof"] is None or job["identity_ots_proof"] is None:
             raise PublicationError("published job is missing timestamp proofs")
         bundle_ots = self.ots.upgrade(
             "seal.skyseal.json",
@@ -319,13 +319,13 @@ class PublicationWorker:
             bytes(job["ots_proof"]),
             self.work_directory,
         )
-        genesis_ots = self.ots.upgrade(
-            "identity-genesis.json.asc",
-            artifacts["identity-genesis.json.asc"],
-            bytes(job["genesis_ots_proof"]),
+        activation_ots = self.ots.upgrade(
+            "identity-activation.json",
+            artifacts["identity-activation.json"],
+            bytes(job["identity_ots_proof"]),
             self.work_directory,
         )
         artifacts["seal.skyseal.json.ots"] = bundle_ots
-        artifacts["identity-genesis.json.asc.ots"] = genesis_ots
+        artifacts["identity-activation.json.ots"] = activation_ots
         self._upload(prefix, artifacts, updating=True)
-        return PublicationResult(prefix, bundle_ots, genesis_ots)
+        return PublicationResult(prefix, bundle_ots, activation_ots)

@@ -78,7 +78,7 @@ log "Refreshing Ubuntu package metadata"
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 apt-get update
-apt-get install -y ca-certificates curl git gnupg python3 python3-venv ufw
+apt-get install -y ca-certificates curl git python3 python3-venv ufw
 
 log "Setting hostname to $TARGET_HOSTNAME"
 hostnamectl set-hostname "$TARGET_HOSTNAME"

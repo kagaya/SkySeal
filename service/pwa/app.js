@@ -59,10 +59,11 @@ async function loadIdentity() {
     return;
   }
   element("identity-state").textContent = `${state.me.display_name} — ${state.me.orcid} — ${state.me.identity_status}`;
-  if (state.me.identity_status === "pending_openpgp" || state.me.identity_status === "active") {
+  if (state.me.identity_status === "pending_activation" || state.me.identity_status === "active") {
     const compact = state.me.orcid.split("/").at(-1);
     element("genesis-download").href = `/api/v1/identity/${compact}/genesis`;
-    show("genesis-panel", state.me.identity_status === "pending_openpgp");
+    show("genesis-panel", state.me.identity_status === "pending_activation");
+    show("activate-identity", state.me.can_activate_identity);
   } else {
     show("genesis-panel", false);
   }
@@ -188,7 +189,7 @@ async function approveSeal() {
     });
     element("confirmation-code").textContent = options.confirmation_code;
     if (options.development_unsealed_identity_bypass) {
-      element("approval-warning").textContent = "開発用設定：OpenPGP未検証IDで承認しています。公開用途には使用できません。";
+      element("approval-warning").textContent = "開発用設定：本人登録が未完了のIDで承認しています。公開用途には使用できません。";
       show("approval-warning");
     }
     const publicKey = options.publicKey;
@@ -224,6 +225,45 @@ async function approveSeal() {
   }
 }
 
+async function activateIdentity() {
+  if (!state.me?.authenticated) throw new Error("先にORCIDで認証してください。");
+  if (!window.PublicKeyCredential) throw new Error("このブラウザはWebAuthnに対応していません。");
+  const button = element("activate-identity");
+  button.disabled = true;
+  try {
+    const options = await requestJSON("/api/v1/identity/activation/options", {
+      method: "POST",
+      headers: csrfHeaders(),
+    });
+    const publicKey = options.publicKey;
+    publicKey.challenge = base64urlToBytes(publicKey.challenge);
+    publicKey.allowCredentials = publicKey.allowCredentials.map((item) => ({
+      ...item,
+      id: base64urlToBytes(item.id),
+    }));
+    const credential = await navigator.credentials.get({publicKey});
+    const response = credential.response;
+    const result = await requestJSON("/api/v1/identity/activation/assertion", {
+      method: "POST",
+      headers: csrfHeaders({"Content-Type": "application/json"}),
+      body: JSON.stringify({
+        raw_id: bytesToBase64url(credential.rawId),
+        type: credential.type,
+        response: {
+          client_data_json: bytesToBase64url(response.clientDataJSON),
+          authenticator_data: bytesToBase64url(response.authenticatorData),
+          signature: bytesToBase64url(response.signature),
+          user_handle: response.userHandle ? bytesToBase64url(response.userHandle) : null,
+        },
+      }),
+    });
+    setResult(result);
+    await loadIdentity();
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function logout() {
   await requestJSON("/api/v1/logout", {method: "POST", headers: csrfHeaders()});
   state.me = null;
@@ -236,6 +276,7 @@ function reportError(error) {
 }
 
 element("register-passkey").addEventListener("click", () => registerPasskey().catch(reportError));
+element("activate-identity").addEventListener("click", () => activateIdentity().catch(reportError));
 element("approve-seal").addEventListener("click", () => approveSeal().catch(reportError));
 element("logout").addEventListener("click", () => logout().catch(reportError));
 element("copy-recovery").addEventListener("click", async () => {

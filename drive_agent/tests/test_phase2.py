@@ -126,7 +126,6 @@ class AgentScanTests(unittest.TestCase):
                 skyseal_server="https://seal.example.org",
                 skyseal_rp_id="seal.example.org",
                 skyseal_agent_token_file=root / "unused-agent-token",
-                openpgp_public_key=root / "unused-public-key",
                 github_owner="kagaya",
                 github_repository="SkySeal",
                 github_token_file=root / "unused-github-token",
@@ -204,26 +203,25 @@ class PublicationTests(unittest.TestCase):
                 "hash_list": hashlib.sha256(b"secret paper").hexdigest().encode() + b"\n",
                 "bundle_json": bundle,
                 "genesis_json": b'{"identity":"public"}\n',
-                "genesis_signature": b"PUBLIC OPENPGP SIGNATURE",
+                "identity_activation": b"PUBLIC PASSKEY ACTIVATION",
                 "ots_proof": None,
-                "genesis_ots_proof": None,
+                "identity_ots_proof": None,
             }
             github = FakeGitHub()
             worker = PublicationWorker(
                 trusted_rp_id="seal.example.org",
                 trusted_origin="https://seal.example.org",
-                openpgp_public_key=root / "unused.asc",
                 work_directory=root / "work",
                 github_prefix="evidence",
                 ots=FakeOTS(),
                 github=github,
             )
             with patch("drive_agent.publication.verify_bundle"), patch(
-                "drive_agent.publication.verify_signature"
+                "drive_agent.publication.verify_identity_activation"
             ):
                 stamped = worker.stamp(job)
                 job["ots_proof"] = stamped.bundle_ots
-                job["genesis_ots_proof"] = stamped.genesis_ots
+                job["identity_ots_proof"] = stamped.activation_ots
                 result = worker.publish(job)
             prefix = f"evidence/2026/08/{seal_id}"
             self.assertEqual(result.prefix, prefix)
@@ -233,9 +231,9 @@ class PublicationTests(unittest.TestCase):
                     f"{prefix}/hashes.txt",
                     f"{prefix}/seal.skyseal.json",
                     f"{prefix}/identity-genesis.json",
-                    f"{prefix}/identity-genesis.json.asc",
+                    f"{prefix}/identity-activation.json",
                     f"{prefix}/seal.skyseal.json.ots",
-                    f"{prefix}/identity-genesis.json.asc.ots",
+                    f"{prefix}/identity-activation.json.ots",
                     f"{prefix}/manifest.json",
                 },
             )
@@ -247,9 +245,9 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual(len(manifest["timestamp_targets"]), 2)
 
             job["ots_proof"] = result.bundle_ots
-            job["genesis_ots_proof"] = result.genesis_ots
+            job["identity_ots_proof"] = result.activation_ots
             with patch("drive_agent.publication.verify_bundle"), patch(
-                "drive_agent.publication.verify_signature"
+                "drive_agent.publication.verify_identity_activation"
             ):
                 upgraded = worker.upgrade(job)
             self.assertTrue(upgraded.bundle_ots.endswith(b"-UPGRADED"))
@@ -265,7 +263,9 @@ class PublicationTests(unittest.TestCase):
 
             def stamp(self, job):
                 self.stamp_count += 1
-                return PublicationResult("evidence/2026/08/seal", b"bundle-ots", b"genesis-ots")
+                return PublicationResult(
+                    "evidence/2026/08/seal", b"bundle-ots", b"activation-ots"
+                )
 
             def publish(self, job):
                 self.publish_count += 1
@@ -274,7 +274,7 @@ class PublicationTests(unittest.TestCase):
                 return PublicationResult(
                     "evidence/2026/08/seal",
                     bytes(job["ots_proof"]),
-                    bytes(job["genesis_ots_proof"]),
+                    bytes(job["identity_ots_proof"]),
                 )
 
         with tempfile.TemporaryDirectory() as directory:
@@ -287,7 +287,6 @@ class PublicationTests(unittest.TestCase):
                 skyseal_server="https://seal.example.org",
                 skyseal_rp_id="seal.example.org",
                 skyseal_agent_token_file=root / "unused-agent-token",
-                openpgp_public_key=root / "unused-public-key",
                 github_owner="kagaya",
                 github_repository="SkySeal",
                 github_token_file=root / "unused-github-token",
@@ -312,7 +311,7 @@ class PublicationTests(unittest.TestCase):
                 "018f0000-0000-7000-8000-000000000099",
                 bundle_json=b"bundle",
                 genesis_json=b"genesis",
-                genesis_signature=b"signature",
+                identity_activation=b"activation",
             )
             publisher = RetryPublisher()
             runtime = AgentRuntime(config, drive, FakeSkySeal(), publisher, store)
@@ -320,7 +319,7 @@ class PublicationTests(unittest.TestCase):
                 runtime.collect()
             preserved = store.get_job("018f0000-0000-7000-8000-000000000099")
             self.assertEqual(bytes(preserved["ots_proof"]), b"bundle-ots")
-            self.assertEqual(bytes(preserved["genesis_ots_proof"]), b"genesis-ots")
+            self.assertEqual(bytes(preserved["identity_ots_proof"]), b"activation-ots")
             self.assertEqual(publisher.stamp_count, 1)
 
             events = runtime.collect()

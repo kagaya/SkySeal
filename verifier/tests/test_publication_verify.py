@@ -19,7 +19,7 @@ class PublicationVerifierTests(unittest.TestCase):
         for name in ARTIFACT_NAMES:
             (root / name).write_bytes(("fixture:" + name + "\n").encode())
         manifest = {
-            "schema": "urn:skyseal:publication-manifest:v1",
+            "schema": "urn:skyseal:publication-manifest:v2",
             "seal_id": "018f0000-0000-7000-8000-000000000001",
             "artifacts": {
                 name: {
@@ -30,8 +30,8 @@ class PublicationVerifierTests(unittest.TestCase):
             "timestamp_targets": [
                 {"proof": "seal.skyseal.json.ots", "target": "seal.skyseal.json"},
                 {
-                    "proof": "identity-genesis.json.asc.ots",
-                    "target": "identity-genesis.json.asc",
+                    "proof": "identity-activation.json.ots",
+                    "target": "identity-activation.json",
                 },
             ],
         }
@@ -63,18 +63,16 @@ class PublicationVerifierTests(unittest.TestCase):
             with patch(
                 "verifier.skyseal_publication_verify.verify_bundle",
                 return_value=bundle_report,
-            ), patch("verifier.skyseal_publication_verify.verify_signature"):
+            ):
                 with self.assertRaisesRegex(VerificationError, "not confirmed"):
                     verify_publication(
                         root,
-                        public_key=root / "unused.asc",
                         trusted_rp_id="seal.example.org",
                         trusted_origin="https://seal.example.org",
                         ots_verify=pending,
                     )
                 report = verify_publication(
                     root,
-                    public_key=root / "unused.asc",
                     trusted_rp_id="seal.example.org",
                     trusted_origin="https://seal.example.org",
                     ots_verify=pending,

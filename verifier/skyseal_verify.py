@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict, offline verifier for the SkySeal v1 Phase 0 core."""
+"""Strict, offline verifier for SkySeal v1.1 public evidence."""
 
 from __future__ import annotations
 
@@ -26,12 +26,15 @@ except ImportError as exc:  # pragma: no cover - exercised by deployment, not te
     ) from exc
 
 
-VERSION = "1.0.0-draft.1"
+VERSION = "1.1.0-draft.1"
 HASH_LIST_FORMAT = "skyseal-sha256-set-v1"
 PAYLOAD_SCHEMA = "urn:skyseal:seal-payload:v1"
 BUNDLE_SCHEMA = "urn:skyseal:webauthn-bundle:v1"
 GENESIS_SCHEMA = "urn:skyseal:identity-genesis:v1"
+IDENTITY_ACTIVATION_PAYLOAD_SCHEMA = "urn:skyseal:identity-activation-payload:v1"
+IDENTITY_ACTIVATION_SCHEMA = "urn:skyseal:identity-activation:v1"
 DOMAIN_SEPARATOR = b"SkySeal WebAuthn Challenge v1\x00"
+IDENTITY_ACTIVATION_DOMAIN_SEPARATOR = b"SkySeal Identity Activation Challenge v1\x00"
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 
 HEX64_RE = re.compile(r"[0-9a-f]{64}")
@@ -460,6 +463,77 @@ def compute_challenge(payload: dict[str, Any]) -> bytes:
     return hashlib.sha256(DOMAIN_SEPARATOR + canonical_json(payload)).digest()
 
 
+def compute_identity_activation_challenge(payload: dict[str, Any]) -> bytes:
+    return hashlib.sha256(
+        IDENTITY_ACTIVATION_DOMAIN_SEPARATOR + canonical_json(payload)
+    ).digest()
+
+
+def validate_identity_activation(value: Any) -> dict[str, Any]:
+    activation = _require_object(value, "identity activation")
+    _require_exact_keys(
+        activation,
+        {"schema", "activation_payload", "webauthn", "verification"},
+        set(),
+        "identity activation",
+    )
+    if activation["schema"] != IDENTITY_ACTIVATION_SCHEMA:
+        fail("identity activation.schema: unsupported schema")
+
+    payload = _require_object(
+        activation["activation_payload"], "identity activation.activation_payload"
+    )
+    _require_exact_keys(
+        payload,
+        {
+            "schema",
+            "identity_id",
+            "identity_version",
+            "identity_genesis_digest",
+            "rp_id",
+            "nonce",
+            "created_at",
+        },
+        set(),
+        "identity activation.activation_payload",
+    )
+    if payload["schema"] != IDENTITY_ACTIVATION_PAYLOAD_SCHEMA:
+        fail("identity activation payload.schema: unsupported schema")
+    validate_orcid(payload["identity_id"], "identity activation payload.identity_id")
+    if payload["identity_version"] != 1 or isinstance(payload["identity_version"], bool):
+        fail("identity activation payload.identity_version: must be integer 1")
+    _require_fullmatch(
+        DIGEST_RE,
+        payload["identity_genesis_digest"],
+        "identity activation payload.identity_genesis_digest",
+    )
+    validate_rp_id(payload["rp_id"], "identity activation payload.rp_id")
+    decode_base64url(payload["nonce"], "identity activation payload.nonce", 32)
+    validate_timestamp(payload["created_at"], "identity activation payload.created_at")
+
+    assertion = _require_object(activation["webauthn"], "identity activation.webauthn")
+    _require_exact_keys(
+        assertion,
+        {"client_data_json", "authenticator_data", "signature"},
+        set(),
+        "identity activation.webauthn",
+    )
+    for member in ("client_data_json", "authenticator_data", "signature"):
+        decode_base64url(assertion[member], f"identity activation.webauthn.{member}")
+
+    hints = _require_object(
+        activation["verification"], "identity activation.verification"
+    )
+    _require_exact_keys(
+        hints, {"rp_id", "allowed_origin"}, set(), "identity activation.verification"
+    )
+    validate_rp_id(hints["rp_id"], "identity activation.verification.rp_id")
+    validate_origin(
+        hints["allowed_origin"], "identity activation.verification.allowed_origin"
+    )
+    return activation
+
+
 def verify_webauthn_signature(
     algorithm: int,
     jwk: dict[str, str],
@@ -482,12 +556,114 @@ def verify_webauthn_signature(
         fail(f"WebAuthn signature verification failed: {type(exc).__name__}")
 
 
+def _verify_webauthn_artifact(
+    assertion: dict[str, Any],
+    *,
+    expected_challenge: bytes,
+    algorithm: int,
+    jwk: dict[str, str],
+    trusted_rp_id: str,
+    trusted_origin: str,
+    context: str,
+) -> tuple[str, int]:
+    client_data_bytes = decode_base64url(
+        assertion["client_data_json"], f"{context}.client_data_json"
+    )
+    client_data = _require_object(
+        parse_json_bytes(client_data_bytes, f"{context}.clientDataJSON"),
+        f"{context}.clientDataJSON",
+    )
+    if client_data.get("type") != "webauthn.get":
+        fail(f"{context}.clientDataJSON.type must be webauthn.get")
+    client_challenge = _require_string(
+        client_data.get("challenge"), f"{context}.clientDataJSON.challenge"
+    )
+    if not hmac.compare_digest(client_challenge, encode_base64url(expected_challenge)):
+        fail(f"{context}.clientDataJSON challenge does not match")
+    if client_data.get("origin") != trusted_origin:
+        fail(f"{context}.clientDataJSON origin does not match the trusted origin")
+    if "crossOrigin" in client_data and client_data["crossOrigin"] is not False:
+        fail(f"{context}: cross-origin WebAuthn assertions are forbidden")
+
+    authenticator_data = decode_base64url(
+        assertion["authenticator_data"], f"{context}.authenticator_data"
+    )
+    if len(authenticator_data) < 37:
+        fail(f"{context}.authenticator_data is shorter than 37 bytes")
+    expected_rp_hash = hashlib.sha256(trusted_rp_id.encode("utf-8")).digest()
+    if not hmac.compare_digest(authenticator_data[:32], expected_rp_hash):
+        fail(f"{context}.authenticator_data rpIdHash does not match the trusted RP ID")
+    flags = authenticator_data[32]
+    if flags & 0x01 == 0:
+        fail(f"{context}: WebAuthn User Present flag is not set")
+    if flags & 0x04 == 0:
+        fail(f"{context}: WebAuthn User Verified flag is not set")
+    if flags & 0x40:
+        fail(f"{context}: unexpected attested-credential-data flag in an assertion")
+    sign_count = int.from_bytes(authenticator_data[33:37], "big")
+
+    signature = decode_base64url(assertion["signature"], f"{context}.signature")
+    signed_bytes = authenticator_data + hashlib.sha256(client_data_bytes).digest()
+    return verify_webauthn_signature(algorithm, jwk, signature, signed_bytes), sign_count
+
+
+def verify_identity_activation(
+    genesis_path: Path,
+    activation_path: Path,
+    trusted_rp_id: str,
+    trusted_origin: str,
+) -> dict[str, Any]:
+    trusted_rp_id = validate_rp_id(trusted_rp_id, "trusted RP ID")
+    trusted_origin = validate_origin(trusted_origin, "trusted origin")
+    genesis = validate_genesis(load_json(genesis_path, "identity genesis"))
+    activation = validate_identity_activation(
+        load_json(activation_path, "identity activation")
+    )
+    payload = activation["activation_payload"]
+    hints = activation["verification"]
+    if hints["rp_id"] != trusted_rp_id or payload["rp_id"] != trusted_rp_id:
+        fail("identity activation RP ID does not match the trusted RP ID")
+    if hints["allowed_origin"] != trusted_origin:
+        fail("identity activation origin does not match the trusted origin")
+    if genesis["rp_id"] != trusted_rp_id:
+        fail("identity genesis RP ID does not match the trusted RP ID")
+    if payload["identity_id"] != genesis["identity_id"]:
+        fail("identity activation ORCID does not match the genesis")
+    if payload["identity_version"] != genesis["identity_version"]:
+        fail("identity activation version does not match the genesis")
+    genesis_digest = "sha256:" + hashlib.sha256(canonical_json(genesis)).hexdigest()
+    if not hmac.compare_digest(payload["identity_genesis_digest"], genesis_digest):
+        fail("identity activation does not match the canonical genesis digest")
+    algorithm, jwk = validate_public_key(genesis["initial_credential_public_key"])
+    algorithm_name, sign_count = _verify_webauthn_artifact(
+        activation["webauthn"],
+        expected_challenge=compute_identity_activation_challenge(payload),
+        algorithm=algorithm,
+        jwk=jwk,
+        trusted_rp_id=trusted_rp_id,
+        trusted_origin=trusted_origin,
+        context="identity activation",
+    )
+    activation_digest = "sha256:" + hashlib.sha256(canonical_json(activation)).hexdigest()
+    return {
+        "ok": True,
+        "identity_id": genesis["identity_id"],
+        "identity_genesis_digest": genesis_digest,
+        "identity_activation_digest": activation_digest,
+        "credential_algorithm": algorithm_name,
+        "sign_count": sign_count,
+        "user_present": True,
+        "user_verified": True,
+    }
+
+
 def verify_bundle(
     hash_list_path: Path,
     bundle_path: Path,
     genesis_path: Path,
     trusted_rp_id: str,
     trusted_origin: str,
+    identity_activation_path: Path | None = None,
 ) -> dict[str, Any]:
     trusted_rp_id = validate_rp_id(trusted_rp_id, "trusted RP ID")
     trusted_origin = validate_origin(trusted_origin, "trusted origin")
@@ -513,48 +689,37 @@ def verify_bundle(
         fail("identity genesis version does not match the signed payload")
 
     genesis_digest = "sha256:" + hashlib.sha256(canonical_json(genesis)).hexdigest()
-    for member in (
-        "identity_genesis_digest",
-        "identity_state_digest",
-        "credential_event_digest",
-    ):
+    for member in ("identity_genesis_digest", "credential_event_digest"):
         if not hmac.compare_digest(identity[member], genesis_digest):
             fail(f"bundle.identity.{member} does not match the canonical genesis digest")
 
+    activation_report = None
+    if identity_activation_path is not None:
+        activation_report = verify_identity_activation(
+            genesis_path,
+            identity_activation_path,
+            trusted_rp_id,
+            trusted_origin,
+        )
+        if not hmac.compare_digest(
+            identity["identity_state_digest"],
+            activation_report["identity_activation_digest"],
+        ):
+            fail("bundle identity state does not match the Passkey activation proof")
+    elif not hmac.compare_digest(identity["identity_state_digest"], genesis_digest):
+        fail("bundle identity state requires an identity activation proof")
+
     expected_challenge = compute_challenge(payload)
-    client_data_bytes = decode_base64url(assertion["client_data_json"], "client_data_json")
-    client_data = _require_object(parse_json_bytes(client_data_bytes, "clientDataJSON"), "clientDataJSON")
-    if client_data.get("type") != "webauthn.get":
-        fail("clientDataJSON.type must be webauthn.get")
-    client_challenge = _require_string(client_data.get("challenge"), "clientDataJSON.challenge")
-    if not hmac.compare_digest(client_challenge, encode_base64url(expected_challenge)):
-        fail("clientDataJSON challenge does not match the signed seal payload")
-    if client_data.get("origin") != trusted_origin:
-        fail("clientDataJSON origin does not match the trusted origin")
-    if "crossOrigin" in client_data and client_data["crossOrigin"] is not False:
-        fail("cross-origin WebAuthn assertions are forbidden")
-
-    authenticator_data = decode_base64url(
-        assertion["authenticator_data"], "authenticator_data"
-    )
-    if len(authenticator_data) < 37:
-        fail("authenticator_data is shorter than 37 bytes")
-    expected_rp_hash = hashlib.sha256(trusted_rp_id.encode("utf-8")).digest()
-    if not hmac.compare_digest(authenticator_data[:32], expected_rp_hash):
-        fail("authenticator_data rpIdHash does not match the trusted RP ID")
-    flags = authenticator_data[32]
-    if flags & 0x01 == 0:
-        fail("WebAuthn User Present flag is not set")
-    if flags & 0x04 == 0:
-        fail("WebAuthn User Verified flag is not set")
-    if flags & 0x40:
-        fail("unexpected attested-credential-data flag in an assertion")
-    sign_count = int.from_bytes(authenticator_data[33:37], "big")
-
-    signature = decode_base64url(assertion["signature"], "signature")
-    signed_bytes = authenticator_data + hashlib.sha256(client_data_bytes).digest()
     algorithm, jwk = validate_public_key(genesis["initial_credential_public_key"])
-    algorithm_name = verify_webauthn_signature(algorithm, jwk, signature, signed_bytes)
+    algorithm_name, sign_count = _verify_webauthn_artifact(
+        assertion,
+        expected_challenge=expected_challenge,
+        algorithm=algorithm,
+        jwk=jwk,
+        trusted_rp_id=trusted_rp_id,
+        trusted_origin=trusted_origin,
+        context="seal assertion",
+    )
 
     return {
         "ok": True,
@@ -577,9 +742,9 @@ def verify_bundle(
             "WebAuthn challenge binding",
             "User Present and User Verified flags",
             f"{algorithm_name} assertion signature",
-        ],
-        "not_checked": [
-            "detached OpenPGP identity-genesis signature",
+        ] + (["ORCID-bound Passkey identity activation"] if activation_report else []),
+        "not_checked": ([] if activation_report else ["Passkey identity activation proof"]) + [
+            "optional detached OpenPGP identity link",
             "credential events after genesis",
             "OpenTimestamps proof",
         ],
@@ -612,11 +777,12 @@ def build_parser() -> argparse.ArgumentParser:
     contains_parser.add_argument("candidate", type=Path)
 
     bundle_parser = subparsers.add_parser(
-        "bundle", help="verify the Phase 0 WebAuthn bundle core"
+        "bundle", help="verify a WebAuthn seal and optional identity activation"
     )
     bundle_parser.add_argument("--hash-list", type=Path, required=True)
     bundle_parser.add_argument("--bundle", type=Path, required=True)
     bundle_parser.add_argument("--identity-genesis", type=Path, required=True)
+    bundle_parser.add_argument("--identity-activation", type=Path)
     bundle_parser.add_argument("--rp-id", required=True)
     bundle_parser.add_argument("--origin", required=True)
     return parser
@@ -652,6 +818,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.identity_genesis,
                 args.rp_id,
                 args.origin,
+                args.identity_activation,
             )
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         if args.command == "contains" and not result["member"]:

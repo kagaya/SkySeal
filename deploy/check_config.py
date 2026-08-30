@@ -8,7 +8,6 @@ import json
 import os
 import shutil
 import stat
-import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -18,7 +17,7 @@ if str(REPOSITORY) not in sys.path:
     sys.path.insert(0, str(REPOSITORY))
 
 from drive_agent.config import AgentConfig, ConfigurationError  # noqa: E402
-from service.config import Config, PINNED_OPENPGP_FINGERPRINT  # noqa: E402
+from service.config import Config  # noqa: E402
 
 
 PLACEHOLDER_FRAGMENTS = ("REPLACE", "EXAMPLE", "CHANGEME")
@@ -72,43 +71,6 @@ def private_mode(path: Path) -> bool:
 def private_directory(path: Path) -> bool:
     mode = path.stat().st_mode
     return stat.S_ISDIR(mode) and not bool(mode & 0o077)
-
-
-def primary_key_fingerprints(public_key: Path) -> set[str]:
-    gpg = shutil.which("gpg")
-    if gpg is None:
-        return set()
-    completed = subprocess.run(
-        [
-            gpg,
-            "--batch",
-            "--no-options",
-            "--with-colons",
-            "--import-options",
-            "show-only",
-            "--dry-run",
-            "--import",
-            str(public_key),
-        ],
-        check=False,
-        capture_output=True,
-        timeout=15,
-    )
-    if completed.returncode != 0:
-        return set()
-    result: set[str] = set()
-    expect_primary = False
-    for line in completed.stdout.decode("utf-8", errors="replace").splitlines():
-        fields = line.split(":")
-        record = fields[0] if fields else ""
-        if record == "pub":
-            expect_primary = True
-        elif record == "sub":
-            expect_primary = False
-        elif record == "fpr" and expect_primary and len(fields) > 9:
-            result.add(fields[9])
-            expect_primary = False
-    return result
 
 
 def check_state_path(checks: Checks, path: Path, label: str) -> None:
@@ -219,17 +181,7 @@ def check_agent() -> int:
     checks.require(private_mode(config.github_token_file), "GitHub token must have mode 600")
     check_service_account(checks, config.google_service_account_file)
 
-    checks.require(
-        config.openpgp_public_key.is_file(),
-        f"OpenPGP public key does not exist: {config.openpgp_public_key}",
-    )
-    if config.openpgp_public_key.is_file():
-        checks.require(
-            PINNED_OPENPGP_FINGERPRINT in primary_key_fingerprints(config.openpgp_public_key),
-            "OpenPGP public key does not match the pinned fingerprint",
-        )
-
-    for executable in ("gpg", "ots", "flock"):
+    for executable in ("ots", "flock"):
         checks.require(shutil.which(executable) is not None, f"required command is missing: {executable}")
     if (config.github_owner, config.github_repository) != ("kagaya", "SkySeal"):
         checks.note("GitHub publication target differs from kagaya/SkySeal; verify this is intentional")

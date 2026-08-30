@@ -39,9 +39,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     approval_url TEXT NOT NULL,
     bundle_json BLOB,
     genesis_json BLOB,
-    genesis_signature BLOB,
+    identity_activation BLOB,
     ots_proof BLOB,
-    genesis_ots_proof BLOB,
+    identity_ots_proof BLOB,
     publication_prefix TEXT,
     error_code TEXT,
     created_at INTEGER NOT NULL,
@@ -76,6 +76,13 @@ class AgentStore:
             with self.connect() as connection:
                 connection.execute("PRAGMA journal_mode = WAL")
                 connection.executescript(SCHEMA)
+                job_columns = {
+                    row["name"] for row in connection.execute("PRAGMA table_info(jobs)")
+                }
+                if "identity_activation" not in job_columns:
+                    connection.execute("ALTER TABLE jobs ADD COLUMN identity_activation BLOB")
+                if "identity_ots_proof" not in job_columns:
+                    connection.execute("ALTER TABLE jobs ADD COLUMN identity_ots_proof BLOB")
         finally:
             os.umask(previous_umask)
         for candidate in (
@@ -216,7 +223,7 @@ class AgentStore:
         *,
         bundle_json: bytes,
         genesis_json: bytes,
-        genesis_signature: bytes,
+        identity_activation: bytes,
     ) -> None:
         now = int(time.time())
         with self.connect() as connection:
@@ -224,10 +231,10 @@ class AgentStore:
                 """
                 UPDATE jobs
                 SET status = 'approved', bundle_json = ?, genesis_json = ?,
-                    genesis_signature = ?, updated_at = ?, error_code = NULL
+                    identity_activation = ?, updated_at = ?, error_code = NULL
                 WHERE seal_id = ? AND status IN ('pending_approval', 'approved')
                 """,
-                (bundle_json, genesis_json, genesis_signature, now, seal_id),
+                (bundle_json, genesis_json, identity_activation, now, seal_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError("job is not available for artifact storage")
@@ -239,17 +246,17 @@ class AgentStore:
             ).fetchone()
 
     def store_timestamp_proofs(
-        self, seal_id: str, ots_proof: bytes, genesis_ots_proof: bytes
+        self, seal_id: str, ots_proof: bytes, identity_ots_proof: bytes
     ) -> None:
         now = int(time.time())
         with self.connect() as connection:
             cursor = connection.execute(
                 """
                 UPDATE jobs
-                SET ots_proof = ?, genesis_ots_proof = ?, updated_at = ?
+                SET ots_proof = ?, identity_ots_proof = ?, updated_at = ?
                 WHERE seal_id = ? AND status = 'approved'
                 """,
-                (ots_proof, genesis_ots_proof, now, seal_id),
+                (ots_proof, identity_ots_proof, now, seal_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError("approved job not found")
@@ -258,7 +265,7 @@ class AgentStore:
         self,
         seal_id: str,
         ots_proof: bytes,
-        genesis_ots_proof: bytes,
+        identity_ots_proof: bytes,
         publication_prefix: str,
     ) -> None:
         now = int(time.time())
@@ -266,25 +273,25 @@ class AgentStore:
             cursor = connection.execute(
                 """
                 UPDATE jobs
-                SET status = 'published', ots_proof = ?, genesis_ots_proof = ?, publication_prefix = ?,
+                SET status = 'published', ots_proof = ?, identity_ots_proof = ?, publication_prefix = ?,
                     updated_at = ?, error_code = NULL
                 WHERE seal_id = ? AND status IN ('approved', 'published')
                 """,
-                (ots_proof, genesis_ots_proof, publication_prefix, now, seal_id),
+                (ots_proof, identity_ots_proof, publication_prefix, now, seal_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError("job is not available for publication")
 
     def update_ots_proofs(
-        self, seal_id: str, ots_proof: bytes, genesis_ots_proof: bytes
+        self, seal_id: str, ots_proof: bytes, identity_ots_proof: bytes
     ) -> None:
         with self.connect() as connection:
             cursor = connection.execute(
                 """
-                UPDATE jobs SET ots_proof = ?, genesis_ots_proof = ?, updated_at = ?
+                UPDATE jobs SET ots_proof = ?, identity_ots_proof = ?, updated_at = ?
                 WHERE seal_id = ? AND status = 'published'
                 """,
-                (ots_proof, genesis_ots_proof, int(time.time()), seal_id),
+                (ots_proof, identity_ots_proof, int(time.time()), seal_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError("published job not found")

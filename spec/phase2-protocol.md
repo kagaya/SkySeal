@@ -1,8 +1,8 @@
 # SkySeal Phase 2 Drive and publication protocol
 
-Status: reference implementation baseline  
-Version: 1.0.0-draft.1  
-Date: 2026-08-29
+Status: reference implementation baseline
+Version: 1.1.0-draft.1
+Date: 2026-08-30
 
 Phase 2 turns a completed upload in a private Google Drive inbox into a
 hash-only approval request and, after WebAuthn approval, a timestamped public
@@ -67,7 +67,7 @@ are deliberately absent.
 ## 4. Identity-bound agent authorization
 
 An operator creates a random 256-bit Drive-agent token only after the ORCID
-identity has an active OpenPGP-verified genesis. The service stores only the
+identity has an active User-Verified Passkey proof. The service stores only the
 SHA-256 token hash. The token is displayed once and stored in a mode-600 file
 on the agent host.
 
@@ -89,16 +89,16 @@ approval, the Drive agent uses its transaction bearer to retrieve:
 - the strict public hash list;
 - the WebAuthn bundle;
 - the identity genesis;
-- the detached OpenPGP genesis signature.
+- the ORCID-bound Passkey identity activation.
 
 Before publication, the agent independently verifies the hash-list commitment,
 WebAuthn signature, trusted RP ID and origin, identity digest, and pinned
-OpenPGP primary fingerprint.
+identity-activation signature.
 
 ## 6. Timestamping and public package
 
-OpenTimestamps stamps the exact WebAuthn bundle and the exact detached OpenPGP
-genesis signature. The initial proof can remain pending until Bitcoin
+OpenTimestamps stamps the exact WebAuthn bundle and the exact
+`identity-activation.json`. The initial proof can remain pending until Bitcoin
 confirmation. A later `upgrade` operation replaces only the `.ots` proof and
 the manifest that records its digest.
 
@@ -110,13 +110,14 @@ evidence/YYYY/MM/<seal-id>/
   seal.skyseal.json
   seal.skyseal.json.ots
   identity-genesis.json
-  identity-genesis.json.asc
-  identity-genesis.json.asc.ots
+  identity-activation.json
+  identity-activation.json.ots
   manifest.json
 ```
 
-`manifest.json` is uploaded last. It contains SHA-256 digests of every other
-artifact and the two proof-to-target relationships. Publication is idempotent:
+`manifest.json` uses `urn:skyseal:publication-manifest:v2` and is uploaded last.
+It contains SHA-256 digests of every other artifact and the two proof-to-target
+relationships. Publication is idempotent:
 identical existing files are accepted, different evidence files are never
 overwritten, and only `.ots` proofs plus their manifest may be updated.
 
@@ -153,4 +154,3 @@ can make closely timed submissions correlatable. These are explicit v1 limits.
 - [Google service-account OAuth](https://developers.google.com/identity/protocols/oauth2/service-account)
 - [GitHub repository contents API](https://docs.github.com/en/rest/repos/contents)
 - [OpenTimestamps client](https://github.com/opentimestamps/opentimestamps-client)
-

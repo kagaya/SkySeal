@@ -63,7 +63,6 @@ class AgentConfig:
     skyseal_server: str
     skyseal_rp_id: str
     skyseal_agent_token_file: Path
-    openpgp_public_key: Path
     github_owner: str
     github_repository: str
     github_token_file: Path
@@ -126,7 +125,6 @@ class AgentConfig:
             skyseal_agent_token_file=private_file(
                 Path(required("SKYSEAL_AGENT_TOKEN_FILE")), "SkySeal agent token"
             ),
-            openpgp_public_key=Path(required("SKYSEAL_OPENPGP_PUBLIC_KEY")).expanduser().resolve(),
             github_owner=required("SKYSEAL_GITHUB_OWNER"),
             github_repository=required("SKYSEAL_GITHUB_REPOSITORY"),
             github_token_file=private_file(

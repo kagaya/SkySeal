@@ -44,34 +44,35 @@ python3 service/app.py
 ```
 
 Then open `http://localhost:8787/api/v1/orcid/mock`. Development bundles use an
-HTTP origin, visibly bypass OpenPGP activation, and are not publishable v1
-evidence.
+HTTP origin, may visibly bypass identity activation, and are not publishable
+v1.1 evidence.
 
-## Initial OpenPGP bootstrap
+## Initial ORCID and Passkey activation
 
-After registering the first passkey:
+On the fixed production origin:
 
-1. Download `identity-genesis.json` from the PWA.
-2. On a PC holding the established secret key, sign the exact bytes:
+1. Sign in through ORCID OAuth. The service validates the authenticated ORCID
+   iD and discards the OAuth access and refresh tokens.
+2. Register the first passkey with User Verification required. An iPhone or
+   iPad can hold this passkey.
+3. Select **Activate identity with Passkey** in the PWA and complete the second
+   User-Verified assertion.
+4. Optionally download `identity-genesis.json` for personal records. The public
+   activation proof is available at
+   `/api/v1/identity/<ORCID>/activation`.
 
-   ```bash
-   gpg --armor --detach-sign \
-     --local-user 85F79058BD83EB3889DEF766B065C54586067E2E \
-     identity-genesis.json
-   ```
+The activation assertion signs a domain-separated challenge over the exact
+canonical genesis digest, ORCID iD, identity version, RP ID, nonce, and creation
+time. `identity-activation.json` contains the public assertion but no raw
+credential ID or user handle. An offline verifier can therefore establish that
+the ORCID-bound genesis was activated by the registered, User-Verified
+passkey.
 
-3. On the service host, verify and activate with the public key only:
-
-   ```bash
-   python3 service/bootstrap_identity.py \
-     --database /var/lib/skyseal/skyseal.sqlite3 \
-     --orcid 0000-0000-0000-0000 \
-     --signature identity-genesis.json.asc \
-     --public-key publickey_kkagaya@mail.kitami-it.ac.jp.asc
-   ```
-
-The OpenPGP secret key never enters the service. OpenTimestamps stamping of the
-genesis signature is added by the Phase 2 background worker.
+The v1 genesis schema still contains the configured OpenPGP fingerprint for
+byte compatibility with identities already registered during the draft. It is
+an optional future or legacy identity link and is not required for activation,
+sealing, or publication. `service/bootstrap_identity.py` is retained only for
+legacy draft databases.
 
 ## PC workflow
 
@@ -96,8 +97,8 @@ list path. It must not be published.
 
 ## Phase 2 Drive agent
 
-After the identity is OpenPGP-activated, create a one-time-display token for a
-private Drive agent:
+After the identity is activated by the ORCID-and-Passkey flow, create a
+one-time-display token for a private Drive agent:
 
 ```bash
 python3 service/create_agent_token.py \

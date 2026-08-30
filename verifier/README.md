@@ -1,4 +1,4 @@
-# SkySeal v1 Phase 0 verifier
+# SkySeal v1.1 verifier
 
 This is the executable reference implementation for the normative core in
 [`../spec/v1.md`](../spec/v1.md). It never reads Google Drive and does not need
@@ -29,30 +29,32 @@ Test whether exact candidate bytes are a member:
 python3 verifier/skyseal_verify.py contains path/to/public.txt candidate.bin
 ```
 
-Verify the Phase 0 WebAuthn core:
+Verify a WebAuthn seal and its identity activation:
 
 ```bash
 python3 verifier/skyseal_verify.py bundle \
   --hash-list spec/test-vectors/v1/valid/public.txt \
   --bundle spec/test-vectors/v1/valid/public.txt.skyseal.json \
   --identity-genesis spec/test-vectors/v1/valid/identity-genesis.json \
+  --identity-activation path/to/identity-activation.json \
   --rp-id seal.example.org \
   --origin https://seal.example.org
 ```
 
-The JSON report separates completed checks from checks not yet implemented.
-Phase 0 does not claim to verify the detached OpenPGP genesis signature, later
-credential-event authorization, or OpenTimestamps proof.
+With `--identity-activation`, the verifier proves that the registered public
+key made a User-Present and User-Verified assertion over the ORCID-bound
+canonical genesis digest. Without it, only legacy bundles whose identity-state
+digest equals the genesis digest can be checked. The JSON report separates
+completed checks from checks not yet implemented.
 
 ## Phase 2 publication directory
 
 After downloading one complete `evidence/YYYY/MM/<seal-id>/` directory, verify
-its manifest, hash set, WebAuthn bundle, OpenPGP genesis signature, and both OTS
-proofs with:
+its manifest, hash set, seal WebAuthn bundle, Passkey identity-activation proof,
+and both OTS proofs with:
 
 ```bash
 python3 verifier/skyseal_publication_verify.py ./evidence-directory \
-  --public-key publickey_kkagaya@mail.kitami-it.ac.jp.asc \
   --rp-id proof.excyberlab.net \
   --origin https://proof.excyberlab.net
 ```

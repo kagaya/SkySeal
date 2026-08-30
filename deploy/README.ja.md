@@ -6,10 +6,9 @@
 
 | ホスト | 保持・処理するもの | 保持しないもの |
 |---|---|---|
-| 公開 Linux VPS | ORCID iD、Passkey 公開鍵、ハッシュ、署名証明、SQLite | Drive のファイル本文・ファイル名、OpenPGP 秘密鍵 |
-| 信頼できる Ubuntu 機 | Drive から取得した一時バイト列、非公開エージェント状態、API 秘密情報 | OpenPGP 秘密鍵、恒久的な原ファイル複製 |
+| 公開 Linux VPS | ORCID iD、Passkey 公開鍵、本人登録証明、ハッシュ、署名証明、SQLite | Drive のファイル本文・ファイル名、Passkey 秘密鍵 |
+| 信頼できる Ubuntu 機 | Drive から取得した一時バイト列、非公開エージェント状態、API 秘密情報 | Passkey 秘密鍵、恒久的な原ファイル複製 |
 | iPhone / iPad | Passkey と利用者の承認操作 | Drive/GitHub の長期 API トークン |
-| 署名用 PC | 既存 OpenPGP 秘密鍵 | 公開サービスの秘密情報 |
 
 Drive エージェントから公開サービスへ送るのは、厳格形式のハッシュ一覧と件数だけである。
 ファイル名、Drive ID、フォルダ構造は送らない。
@@ -28,8 +27,8 @@ originまたはRP IDを変更すると既存Passkeyが使えなくなるため�
 3. Google Cloud の service account JSON。Drive API v3 を有効にし、監視専用フォルダだけを
    service account のメールアドレスへ閲覧者として共有する。Domain-wide delegation は使わない。
 4. `kagaya/SkySeal` のみに限定し `Contents: write` だけを与えた fine-grained GitHub token。
-5. 既存 OpenPGP 秘密鍵を利用できる署名用 PC。秘密鍵はその PC から出さない。対応する
-   公開鍵はリポジトリ内の `publickey_kkagaya@mail.kitami-it.ac.jp.asc` を使う。
+5. iCloudキーチェーンのPasskeyを利用できるiPhoneまたはiPad。本人登録の有効化と、各sealの
+   承認時に画面ロック解除によるユーザー確認を行う。
 
 VPS は、1 GB以上のメモリ、固定グローバル IPv4、20 GB以上の永続ディスク、対応中の
 Ubuntu LTS、外部パケットフィルターを備える最小構成でよい。外部着信は SSH（接続元を
@@ -110,32 +109,16 @@ curl -I https://proof.excyberlab.net/
 ## 初回本人登録
 
 1. iPhone / iPad の Safari で `https://proof.excyberlab.net/` を開く。
-2. ORCID でログインし、Passkey を登録する。
-3. PWA から `identity-genesis.json` をダウンロードする。
-4. 既存 OpenPGP 秘密鍵のある PC で、ダウンロードしたバイト列をそのまま署名する。
+2. ORCID でログインする。サービスは認証済みORCID iDだけを保持し、OAuthトークンは破棄する。
+3. Passkey を登録し、表示されたリカバリーコードをiPhoneの「パスワード」へ保存する。
+4. PWA の「パスキーで本人登録を有効化」を押し、Face ID、Touch IDまたは端末コードで
+   ユーザー確認済みの署名を行う。
+5. 画面が「本人登録: 有効」になったことを確認する。
 
-```bash
-gpg --armor --detach-sign \
-  --local-user 85F79058BD83EB3889DEF766B065C54586067E2E \
-  identity-genesis.json
-```
-
-署名だけを公開サービスホストへ移す。受け渡し用ファイルは `skyseal` 所有の
-mode 600 にしてから検証・有効化する。サービス側DBが保持する genesis と署名が照合されるため、
-ダウンロードした `identity-genesis.json` をサービスへ戻す必要はない。
-
-```bash
-sudo install -o skyseal -g skyseal -m 0600 identity-genesis.json.asc \
-  /var/lib/skyseal/bootstrap-genesis.asc
-sudo -u skyseal /opt/skyseal/.venv/bin/python \
-  /opt/skyseal/service/bootstrap_identity.py \
-  --database /var/lib/skyseal/skyseal.sqlite3 \
-  --orcid 0000-0000-0000-0000 \
-  --signature /var/lib/skyseal/bootstrap-genesis.asc \
-  --public-key /opt/skyseal/publickey_kkagaya@mail.kitami-it.ac.jp.asc
-```
-
-秘密鍵そのものは移動しない。有効化後、受け渡し用の署名ファイルは削除してよい。
+この操作で公開可能な `identity-activation.json` が生成される。内容はORCID、genesisの
+ダイジェスト、固定RP ID、nonce、作成時刻、およびPasskey署名であり、raw credential IDや
+user handleは含まない。`identity-genesis.json` は任意で保管してよいが、OpenPGP署名や
+署名用PCは本番運用の必須条件ではない。
 
 ## Drive エージェントホスト
 
@@ -152,21 +135,17 @@ sudo /opt/skyseal/.venv/bin/pip install -r /opt/skyseal/verifier/requirements.tx
 sudo /opt/skyseal/.venv/bin/pip install -r /opt/skyseal/drive_agent/requirements.txt
 sudo install -o skyseal -g skyseal -m 0600 \
   /opt/skyseal/drive_agent/env.example /etc/skyseal/agent.env
-sudo install -o skyseal -g skyseal -m 0600 \
-  /opt/skyseal/publickey_kkagaya@mail.kitami-it.ac.jp.asc \
-  /etc/skyseal/kagaya-public.asc
 sudoedit /etc/skyseal/agent.env
 ```
 
-OS パッケージとして `gpg`、`flock`、OpenTimestamps の `ots` command を用意する。
-次の4ファイルを `/etc/skyseal` に配置する。
+OS パッケージとして `flock` と OpenTimestamps の `ots` command を用意する。
+次の3ファイルを `/etc/skyseal` に配置する。
 
 - `google-service-account.json`（600）
 - `github.token`（1行、600）
 - `drive-agent.token`（1行、600）
-- `kagaya-public.asc`（公開鍵）
 
-最初の3秘密ファイルは `skyseal:skyseal` 所有、mode 600 にする。専用ユーザー以外へ
+3秘密ファイルは `skyseal:skyseal` 所有、mode 600 にする。専用ユーザー以外へ
 読み取り権限を与えない。
 
 Drive agent token は、本人登録を有効化した後、公開サービスホストで一度だけ生成する。
@@ -202,7 +181,9 @@ sudo systemctl enable --now skyseal-drive-agent.timer skyseal-ots-upgrade.timer
 2. 120秒変更せず待つ。
 3. iPhone / iPad の PWA に、ファイル名なしで到着時刻とハッシュ件数だけが出ることを確認する。
 4. Passkey で承認する。
-5. GitHub の `evidence/YYYY/MM/<opaque-seal-id>/` に証拠一式が公開されることを確認する。
+5. GitHub の `evidence/YYYY/MM/<opaque-seal-id>/` に、ハッシュ一覧、seal署名、
+   `identity-genesis.json`、`identity-activation.json`、両OpenTimestamps証明、および
+   manifestが公開されることを確認する。
 6. 元ファイルを第三者へ渡さずに公開 verifier が成立し、別途同一ファイルを与えた場合だけ照合できることを確認する。
 
 本番の論文・データセットを入れるのは、このテストに合格してからにする。

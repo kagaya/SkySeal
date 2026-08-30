@@ -9,13 +9,14 @@ of the private Drive unit ID. Read `spec/phase2-protocol.md` before deployment.
 
 ## Prerequisites
 
-1. Deploy and activate the Phase 1 SkySeal identity.
+1. Deploy Phase 1, authenticate the ORCID iD, register the first passkey, and
+   activate the identity with a User-Verified passkey assertion.
 2. Create a Google Cloud service account and enable Drive API v3.
 3. Share only the private inbox folder with the service-account email as a
    viewer. Do not enable domain-wide delegation.
 4. Create a fine-grained GitHub token restricted to the evidence repository
    with `Contents: write`.
-5. Install `gpg`, the `ots` command, and Python dependencies:
+5. Install the `ots` command and Python dependencies:
 
    ```bash
    python3 -m pip install -r verifier/requirements.txt
@@ -62,8 +63,9 @@ python3 drive_agent/agent.py upgrade
 
 After upload and the settle interval, open the installed SkySeal PWA on an
 iPhone or iPad. The pending card shows only arrival time and hash count. Tap the
-request and approve it with the passkey. `collect` then verifies, timestamps,
-and publishes the package. Run `upgrade` later to add confirmed Bitcoin paths
-to pending OTS proofs.
+request and approve it with the passkey. `collect` then verifies the ORCID-bound
+identity activation and seal signatures, timestamps both public proofs, and
+publishes the package. Run `upgrade` later to add confirmed Bitcoin paths to
+pending OTS proofs.
 
 The SQLite database and its WAL files are private state. Do not publish them.

@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS identities (
     genesis_json BLOB NOT NULL,
     genesis_digest TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('pending_openpgp', 'active')),
+    activation_method TEXT CHECK (activation_method IN ('webauthn_v1', 'openpgp_v1')),
+    activation_payload BLOB,
+    activation_challenge BLOB,
+    activation_expires_at INTEGER,
+    activation_proof BLOB,
+    activation_digest TEXT,
     openpgp_signature BLOB,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -134,6 +140,22 @@ class Store:
                     connection.execute(
                         "ALTER TABLE seals ADD COLUMN source TEXT NOT NULL DEFAULT 'interactive'"
                     )
+                identity_columns = {
+                    row["name"] for row in connection.execute("PRAGMA table_info(identities)")
+                }
+                identity_migrations = {
+                    "activation_method": "TEXT",
+                    "activation_payload": "BLOB",
+                    "activation_challenge": "BLOB",
+                    "activation_expires_at": "INTEGER",
+                    "activation_proof": "BLOB",
+                    "activation_digest": "TEXT",
+                }
+                for name, column_type in identity_migrations.items():
+                    if name not in identity_columns:
+                        connection.execute(
+                            f"ALTER TABLE identities ADD COLUMN {name} {column_type}"
+                        )
         finally:
             os.umask(previous_umask)
         for candidate in (
@@ -350,7 +372,9 @@ class Store:
             cursor = connection.execute(
                 """
                 UPDATE identities
-                SET status = 'active', openpgp_signature = ?, updated_at = ?
+                SET status = 'active', activation_method = 'openpgp_v1',
+                    activation_digest = genesis_digest,
+                    openpgp_signature = ?, updated_at = ?
                 WHERE orcid = ?
                 """,
                 (signature, now, orcid),
@@ -358,15 +382,101 @@ class Store:
             if cursor.rowcount != 1:
                 raise ValueError("identity not found")
 
+    def start_identity_activation(
+        self,
+        orcid: str,
+        payload_json: bytes,
+        challenge: bytes,
+        lifetime_seconds: int,
+    ) -> sqlite3.Row:
+        now = int(time.time())
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE identities
+                SET activation_payload = ?, activation_challenge = ?,
+                    activation_expires_at = ?, updated_at = ?
+                WHERE orcid = ?
+                  AND status IN ('pending_openpgp', 'active')
+                  AND COALESCE(activation_method, '') != 'webauthn_v1'
+                """,
+                (payload_json, challenge, now + lifetime_seconds, now, orcid),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("identity is not awaiting Passkey activation")
+            return connection.execute(
+                "SELECT * FROM identities WHERE orcid = ?", (orcid,)
+            ).fetchone()
+
+    def consume_identity_activation(self, orcid: str) -> sqlite3.Row | None:
+        now = int(time.time())
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM identities
+                WHERE orcid = ?
+                  AND status IN ('pending_openpgp', 'active')
+                  AND COALESCE(activation_method, '') != 'webauthn_v1'
+                  AND activation_challenge IS NOT NULL
+                """,
+                (orcid,),
+            ).fetchone()
+            connection.execute(
+                """
+                UPDATE identities
+                SET activation_payload = NULL, activation_challenge = NULL,
+                    activation_expires_at = NULL, updated_at = ?
+                WHERE orcid = ?
+                """,
+                (now, orcid),
+            )
+        if row is None or row["activation_expires_at"] is None:
+            return None
+        if row["activation_expires_at"] < now:
+            return None
+        return row
+
+    def activate_identity_with_passkey(
+        self,
+        orcid: str,
+        activation_proof: bytes,
+        activation_digest: str,
+    ) -> None:
+        now = int(time.time())
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE identities
+                SET status = 'active', activation_method = 'webauthn_v1',
+                    activation_proof = ?, activation_digest = ?, updated_at = ?
+                WHERE orcid = ?
+                  AND status IN ('pending_openpgp', 'active')
+                  AND COALESCE(activation_method, '') != 'webauthn_v1'
+                """,
+                (activation_proof, activation_digest, now, orcid),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("identity is not awaiting Passkey activation")
+
     def create_agent_token(self, orcid: str) -> str:
         raw_token = encode_base64url(secrets.token_bytes(32))
         now = int(time.time())
         with self.connect() as connection:
             identity = connection.execute(
-                "SELECT status FROM identities WHERE orcid = ?", (orcid,)
+                """
+                SELECT status, activation_method, activation_proof, activation_digest
+                FROM identities WHERE orcid = ?
+                """,
+                (orcid,),
             ).fetchone()
-            if identity is None or identity["status"] != "active":
-                raise ValueError("an active OpenPGP-verified identity is required")
+            if (
+                identity is None
+                or identity["status"] != "active"
+                or identity["activation_method"] != "webauthn_v1"
+                or identity["activation_proof"] is None
+                or identity["activation_digest"] is None
+            ):
+                raise ValueError("an active ORCID-and-Passkey identity is required")
             connection.execute(
                 "INSERT INTO agent_tokens VALUES (?, ?, 'active', ?, NULL)",
                 (token_hash(raw_token), orcid, now),

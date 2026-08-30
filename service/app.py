@@ -37,10 +37,13 @@ from verifier.skyseal_verify import (
     GENESIS_SCHEMA,
     HASH_LIST_FORMAT,
     HEX64_RE,
+    IDENTITY_ACTIVATION_PAYLOAD_SCHEMA,
+    IDENTITY_ACTIVATION_SCHEMA,
     PAYLOAD_SCHEMA,
     VerificationError,
     canonical_json,
     compute_challenge,
+    compute_identity_activation_challenge,
     decode_base64url,
     encode_base64url,
     parse_json_bytes,
@@ -263,13 +266,19 @@ class Application:
                 return self._registration_options(headers)
             if method == "POST" and path == "/api/v1/webauthn/registration/complete":
                 return self._registration_complete(headers, body)
+            if method == "POST" and path == "/api/v1/identity/activation/options":
+                return self._identity_activation_options(headers)
+            if method == "POST" and path == "/api/v1/identity/activation/assertion":
+                return self._identity_activation_assertion(headers, body)
             identity_match = re.fullmatch(
-                r"/api/v1/identity/([0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X])/(genesis|genesis\.asc)",
+                r"/api/v1/identity/([0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X])/(genesis|genesis\.asc|activation)",
                 path,
             )
             if method == "GET" and identity_match:
                 if identity_match.group(2) == "genesis":
                     return self._identity_genesis(identity_match.group(1))
+                if identity_match.group(2) == "activation":
+                    return self._identity_activation(identity_match.group(1))
                 return self._identity_genesis_signature(identity_match.group(1))
             if method == "GET" and path == "/api/v1/seals/pending":
                 return self._pending_seals(headers)
@@ -364,6 +373,16 @@ class Application:
             )
         credentials = self.store.list_active_credentials(session["orcid"])
         identity = self.store.get_identity(session["orcid"])
+        passkey_active = bool(
+            identity
+            and identity["status"] == "active"
+            and identity["activation_method"] == "webauthn_v1"
+            and identity["activation_proof"] is not None
+            and identity["activation_digest"] is not None
+        )
+        public_status = (
+            "active" if passkey_active else "pending_activation" if identity else "not_enrolled"
+        )
         return self._json(
             HTTPStatus.OK,
             {
@@ -372,7 +391,13 @@ class Application:
                 "display_name": session["display_name"],
                 "csrf_token": session["csrf_token"],
                 "credential_count": len(credentials),
-                "identity_status": identity["status"] if identity else "not_enrolled",
+                "identity_status": public_status,
+                "identity_activation_method": identity["activation_method"] if identity else None,
+                "can_activate_identity": bool(
+                    identity
+                    and not passkey_active
+                    and credentials
+                ),
                 "can_register_initial_passkey": not credentials and identity is None,
                 "development_unsealed_identity_bypass": self.config.allow_unsealed_identity,
             },
@@ -491,7 +516,7 @@ class Application:
             {
                 "ok": True,
                 "credential_ref": credential_ref,
-                "identity_status": identity["status"],
+                "identity_status": "pending_activation",
                 "identity_genesis_digest": identity["genesis_digest"],
                 "genesis_url": f"/api/v1/identity/{compact}/genesis",
             },
@@ -535,6 +560,164 @@ class Application:
                 ("Cache-Control", "no-store"),
                 ("Content-Disposition", 'attachment; filename="identity-genesis.json.asc"'),
             ],
+        )
+
+    def _identity_activation(self, compact_orcid: str) -> Response:
+        identity_url = f"https://orcid.org/{compact_orcid}"
+        validate_orcid(identity_url, "identity path")
+        identity = self.store.get_identity(identity_url)
+        if (
+            identity is None
+            or identity["status"] != "active"
+            or identity["activation_method"] != "webauthn_v1"
+            or identity["activation_proof"] is None
+        ):
+            return self._error(
+                HTTPStatus.NOT_FOUND, "not_found", "Passkey identity activation not found"
+            )
+        return self._response(
+            HTTPStatus.OK,
+            bytes(identity["activation_proof"]),
+            [
+                ("Content-Type", "application/json; charset=utf-8"),
+                ("Cache-Control", "no-store"),
+                ("Content-Disposition", 'attachment; filename="identity-activation.json"'),
+            ],
+        )
+
+    def _identity_activation_options(self, headers: dict[str, str]) -> Response:
+        session = self._require_session(headers)
+        self._require_csrf(headers, session)
+        identity = self.store.get_identity(session["orcid"])
+        if identity is None:
+            return self._error(
+                HTTPStatus.CONFLICT, "identity_missing", "register a Passkey first"
+            )
+        if (
+            identity["status"] == "active"
+            and identity["activation_method"] == "webauthn_v1"
+            and identity["activation_proof"] is not None
+            and identity["activation_digest"] is not None
+        ):
+            return self._error(
+                HTTPStatus.CONFLICT, "already_active", "identity is already active"
+            )
+        credentials = self.store.list_active_credentials(session["orcid"])
+        if not credentials:
+            return self._error(
+                HTTPStatus.CONFLICT, "credential_missing", "no active Passkey"
+            )
+        payload = {
+            "schema": IDENTITY_ACTIVATION_PAYLOAD_SCHEMA,
+            "identity_id": session["orcid"],
+            "identity_version": 1,
+            "identity_genesis_digest": identity["genesis_digest"],
+            "rp_id": self.config.rp_id,
+            "nonce": encode_base64url(secrets.token_bytes(32)),
+            "created_at": utc_timestamp(),
+        }
+        payload_json = canonical_json(payload)
+        challenge = compute_identity_activation_challenge(payload)
+        self.store.start_identity_activation(
+            session["orcid"],
+            payload_json,
+            challenge,
+            self.config.assertion_lifetime_seconds,
+        )
+        allow_credentials = []
+        for credential in credentials:
+            transports = set(json.loads(credential["transports_json"]))
+            transports.add("hybrid")
+            allow_credentials.append(
+                {
+                    "type": "public-key",
+                    "id": encode_base64url(bytes(credential["raw_id"])),
+                    "transports": sorted(transports),
+                }
+            )
+        code = hashlib.sha256(payload_json).hexdigest()[:8].upper()
+        return self._json(
+            HTTPStatus.OK,
+            {
+                "confirmation_code": f"{code[:4]}-{code[4:]}",
+                "identity_id": session["orcid"],
+                "identity_genesis_digest": identity["genesis_digest"],
+                "publicKey": {
+                    "challenge": encode_base64url(challenge),
+                    "rpId": self.config.rp_id,
+                    "timeout": self.config.assertion_lifetime_seconds * 1000,
+                    "userVerification": "required",
+                    "allowCredentials": allow_credentials,
+                },
+            },
+        )
+
+    def _identity_activation_assertion(
+        self, headers: dict[str, str], body: bytes
+    ) -> Response:
+        session = self._require_session(headers)
+        self._require_csrf(headers, session)
+        assertion_dict = exact_object(
+            self._parse_json(body, "identity activation assertion"),
+            {"raw_id", "type", "response"},
+            "identity activation assertion",
+        )
+        raw_id = decode_base64url(assertion_dict["raw_id"], "assertion.raw_id")
+        credential = self.store.get_credential(raw_id)
+        if (
+            credential is None
+            or credential["status"] != "active"
+            or credential["orcid"] != session["orcid"]
+        ):
+            raise PermissionError("credential is not active for this identity")
+        pending = self.store.consume_identity_activation(session["orcid"])
+        if pending is None:
+            return self._error(
+                HTTPStatus.CONFLICT,
+                "activation_challenge_missing",
+                "identity activation challenge is expired or already used",
+            )
+        result = verify_assertion(
+            assertion_dict,
+            expected_challenge=bytes(pending["activation_challenge"]),
+            rp_id=self.config.rp_id,
+            origin=self.config.origin,
+            algorithm=credential["algorithm"],
+            jwk=json.loads(credential["jwk_json"]),
+            expected_raw_id=bytes(credential["raw_id"]),
+            expected_user_handle=bytes(session["user_handle"]),
+        )
+        self.store.update_sign_count(credential["credential_id_hash"], result.sign_count)
+        payload = parse_json_bytes(
+            bytes(pending["activation_payload"]), "stored identity activation payload"
+        )
+        proof = {
+            "schema": IDENTITY_ACTIVATION_SCHEMA,
+            "activation_payload": payload,
+            "webauthn": {
+                "client_data_json": encode_base64url(result.client_data_json),
+                "authenticator_data": encode_base64url(result.authenticator_data),
+                "signature": encode_base64url(result.signature),
+            },
+            "verification": {
+                "rp_id": self.config.rp_id,
+                "allowed_origin": self.config.origin,
+            },
+        }
+        proof_json = canonical_json(proof) + b"\n"
+        proof_digest = "sha256:" + hashlib.sha256(canonical_json(proof)).hexdigest()
+        self.store.activate_identity_with_passkey(
+            session["orcid"], proof_json, proof_digest
+        )
+        return self._json(
+            HTTPStatus.OK,
+            {
+                "ok": True,
+                "identity_status": "active",
+                "activation_method": "orcid_oauth+webauthn",
+                "identity_activation_digest": proof_digest,
+                "credential_algorithm": result.algorithm_name,
+            },
         )
 
     def _create_seal(self, headers: dict[str, str], body: bytes) -> Response:
@@ -643,11 +826,17 @@ class Application:
         identity = self.store.get_identity(session["orcid"])
         if identity is None:
             return self._error(HTTPStatus.CONFLICT, "identity_missing", "register a passkey first")
-        if identity["status"] != "active" and not self.config.allow_unsealed_identity:
+        passkey_active = bool(
+            identity["status"] == "active"
+            and identity["activation_method"] == "webauthn_v1"
+            and identity["activation_proof"] is not None
+            and identity["activation_digest"] is not None
+        )
+        if not passkey_active and not self.config.allow_unsealed_identity:
             return self._error(
                 HTTPStatus.CONFLICT,
-                "identity_pending_openpgp",
-                "verify the OpenPGP identity-genesis signature before approving seals",
+                "identity_pending_activation",
+                "activate the ORCID identity with the registered Passkey before approving seals",
             )
         credentials = self.store.list_active_credentials(session["orcid"])
         if not credentials:
@@ -660,7 +849,7 @@ class Application:
             "subject_digest": {"algorithm": "sha256", "value": seal["subject_digest"]},
             "identity_id": session["orcid"],
             "identity_version": 1,
-            "identity_state_digest": identity["genesis_digest"],
+            "identity_state_digest": identity["activation_digest"] or identity["genesis_digest"],
             "nonce": encode_base64url(secrets.token_bytes(32)),
             "created_at": created_at,
         }
@@ -759,7 +948,7 @@ class Application:
             "identity": {
                 "orcid": session["orcid"],
                 "identity_genesis_digest": identity["genesis_digest"],
-                "identity_state_digest": identity["genesis_digest"],
+                "identity_state_digest": identity["activation_digest"] or identity["genesis_digest"],
                 "credential_event_digest": identity["genesis_digest"],
             },
             "verification": {
@@ -800,7 +989,7 @@ class Application:
 
 
 class RequestHandler(BaseHTTPRequestHandler):
-    server_version = "SkySeal/1.0"
+    server_version = "SkySeal/1.1"
 
     @property
     def application(self) -> Application:
@@ -819,7 +1008,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         else:
             body = self.rfile.read(length) if length else b""
             response = self.application.handle(
-                self.command,
+                "GET" if self.command == "HEAD" else self.command,
                 self.path,
                 {key: value for key, value in self.headers.items()},
                 body,
@@ -833,6 +1022,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(response.body)
 
     do_GET = _handle
+    do_HEAD = _handle
     do_POST = _handle
 
     def log_message(self, format_string: str, *args: object) -> None:

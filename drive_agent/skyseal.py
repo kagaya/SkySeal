@@ -26,7 +26,7 @@ class SealTransaction:
 class ApprovedArtifacts:
     bundle_json: bytes
     genesis_json: bytes
-    genesis_signature: bytes
+    identity_activation: bytes
 
 
 class SkySealClient:
@@ -134,5 +134,5 @@ class SkySealClient:
             raise SkySealAPIError(str(exc)) from exc
         compact = str(orcid).rsplit("/", 1)[-1]
         genesis = self._request(f"/api/v1/identity/{compact}/genesis")
-        signature = self._request(f"/api/v1/identity/{compact}/genesis.asc")
-        return ApprovedArtifacts(bundle, genesis, signature)
+        activation = self._request(f"/api/v1/identity/{compact}/activation")
+        return ApprovedArtifacts(bundle, genesis, activation)

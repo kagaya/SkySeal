@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,11 +17,14 @@ from service.bootstrap_identity import valid_signature_fingerprints, verify_sign
 from service.cbor import CBORDecodeError, decode_one
 from service.config import Config
 from service.orcid import AuthenticatedORCID
+from service.storage import Store
 from verifier.skyseal_verify import (
+    VerificationError,
     canonical_json,
     decode_base64url,
     encode_base64url,
     verify_bundle,
+    verify_identity_activation,
 )
 
 
@@ -162,11 +166,65 @@ class Phase1FlowTests(unittest.TestCase):
         self.assertEqual(completed.status, 201, completed.body)
         return response_json(completed)
 
+    def assertion_body(self, challenge: bytes) -> bytes:
+        client_data = json.dumps(
+            {
+                "type": "webauthn.get",
+                "challenge": encode_base64url(challenge),
+                "origin": ORIGIN,
+                "crossOrigin": False,
+            },
+            separators=(",", ":"),
+        ).encode()
+        authenticator_data = (
+            hashlib.sha256(RP_ID.encode()).digest()
+            + bytes([0x05])
+            + (0).to_bytes(4, "big")
+        )
+        signature = self.private_key.sign(
+            authenticator_data + hashlib.sha256(client_data).digest(),
+            ec.ECDSA(hashes.SHA256(), deterministic_signing=True),
+        )
+        return json.dumps(
+            {
+                "raw_id": encode_base64url(self.raw_id),
+                "type": "public-key",
+                "response": {
+                    "client_data_json": encode_base64url(client_data),
+                    "authenticator_data": encode_base64url(authenticator_data),
+                    "signature": encode_base64url(signature),
+                    "user_handle": None,
+                },
+            },
+            separators=(",", ":"),
+        ).encode()
+
+    def activate_with_passkey(self) -> dict:
+        options = response_json(
+            self.app.handle(
+                "POST", "/api/v1/identity/activation/options", self.session_headers
+            )
+        )
+        challenge = decode_base64url(
+            options["publicKey"]["challenge"], "activation challenge"
+        )
+        completed = self.app.handle(
+            "POST",
+            "/api/v1/identity/activation/assertion",
+            {**self.session_headers, "Content-Type": "application/json"},
+            self.assertion_body(challenge),
+        )
+        self.assertEqual(completed.status, 200, completed.body)
+        return response_json(completed)
+
     def test_complete_enrollment_approval_and_offline_verification(self) -> None:
         enrollment = self.enroll()
-        self.assertEqual(enrollment["identity_status"], "pending_openpgp")
+        self.assertEqual(enrollment["identity_status"], "pending_activation")
         identity = self.app.store.get_identity(ORCID)
         self.assertNotIn(encode_base64url(self.raw_id).encode(), bytes(identity["genesis_json"]))
+        self.activate_with_passkey()
+        identity = self.app.store.get_identity(ORCID)
+        self.assertEqual(identity["activation_method"], "webauthn_v1")
 
         member_bytes = b"private research bytes remain on the PC\n"
         file_hash = hashlib.sha256(member_bytes).hexdigest()
@@ -253,9 +311,30 @@ class Phase1FlowTests(unittest.TestCase):
         bundle_path.write_bytes(bundle_response.body)
         genesis_path = self.root / "identity-genesis.json"
         genesis_path.write_bytes(bytes(identity["genesis_json"]))
-        report = verify_bundle(hash_list, bundle_path, genesis_path, RP_ID, ORIGIN)
+        compact = ORCID.rsplit("/", 1)[-1]
+        activation_response = self.app.handle(
+            "GET", f"/api/v1/identity/{compact}/activation"
+        )
+        self.assertEqual(activation_response.status, 200)
+        activation_path = self.root / "identity-activation.json"
+        activation_path.write_bytes(activation_response.body)
+        report = verify_bundle(
+            hash_list, bundle_path, genesis_path, RP_ID, ORIGIN, activation_path
+        )
         self.assertTrue(report["ok"])
         self.assertEqual(report["entry_count"], 1)
+        with self.assertRaisesRegex(
+            VerificationError, "requires an identity activation proof"
+        ):
+            verify_bundle(hash_list, bundle_path, genesis_path, RP_ID, ORIGIN)
+        tampered = json.loads(activation_response.body)
+        tampered["activation_payload"]["nonce"] = encode_base64url(bytes(32))
+        tampered_path = self.root / "tampered-identity-activation.json"
+        tampered_path.write_bytes(canonical_json(tampered) + b"\n")
+        with self.assertRaisesRegex(VerificationError, "challenge does not match"):
+            verify_identity_activation(
+                genesis_path, tampered_path, RP_ID, ORIGIN
+            )
 
     def test_registration_challenge_mismatch_is_rejected_and_consumed(self) -> None:
         options = response_json(
@@ -298,8 +377,7 @@ class Phase1FlowTests(unittest.TestCase):
 
     def test_drive_agent_creates_identity_inbox_transaction_without_public_source_metadata(self) -> None:
         self.enroll()
-        genesis_signature = b"test-only OpenPGP signature bytes"
-        self.app.store.activate_identity(ORCID, genesis_signature)
+        self.activate_with_passkey()
         agent_token = self.app.store.create_agent_token(ORCID)
         subject_digest = hashlib.sha256(b"private strict hash list\n").hexdigest()
         created = self.app.handle(
@@ -417,11 +495,11 @@ class Phase1FlowTests(unittest.TestCase):
         self.assertNotIn(b"drive", agent_bundle.body.lower())
 
         compact = ORCID.rsplit("/", 1)[-1]
-        signature = self.app.handle(
-            "GET", f"/api/v1/identity/{compact}/genesis.asc"
+        activation = self.app.handle(
+            "GET", f"/api/v1/identity/{compact}/activation"
         )
-        self.assertEqual(signature.status, 200)
-        self.assertEqual(signature.body, genesis_signature)
+        self.assertEqual(activation.status, 200)
+        self.assertIn(b"identity-activation:v1", activation.body)
 
         with self.app.store.connect() as connection:
             seal = connection.execute(
@@ -431,6 +509,21 @@ class Phase1FlowTests(unittest.TestCase):
         self.assertEqual(seal["source"], "drive_agent")
         self.assertEqual(seal["identity_id"], ORCID)
         self.assertNotEqual(agent["token_hash"], agent_token)
+
+    def test_legacy_openpgp_identity_can_migrate_but_cannot_issue_agent_token_first(
+        self,
+    ) -> None:
+        self.enroll()
+        self.app.store.activate_identity(ORCID, b"legacy draft signature")
+        me = response_json(self.app.handle("GET", "/api/v1/me", self.session_headers))
+        self.assertEqual(me["identity_status"], "pending_activation")
+        self.assertTrue(me["can_activate_identity"])
+        with self.assertRaisesRegex(ValueError, "ORCID-and-Passkey"):
+            self.app.store.create_agent_token(ORCID)
+        self.activate_with_passkey()
+        migrated = self.app.store.get_identity(ORCID)
+        self.assertEqual(migrated["activation_method"], "webauthn_v1")
+        self.assertTrue(self.app.store.create_agent_token(ORCID))
 
     def test_production_pending_identity_cannot_approve(self) -> None:
         production_config = Config(
@@ -472,8 +565,21 @@ class Phase1FlowTests(unittest.TestCase):
             {**headers, "Authorization": f"Bearer {created['bearer_token']}"},
         )
         self.assertEqual(response.status, 409)
-        self.assertEqual(response_json(response)["error"], "identity_pending_openpgp")
-        app.store.activate_identity(ORCID, b"test-only verified signature placeholder")
+        self.assertEqual(response_json(response)["error"], "identity_pending_activation")
+        activated_identity = self.activate_with_passkey()
+        self.assertEqual(activated_identity["identity_status"], "active")
+        compact = ORCID.rsplit("/", 1)[-1]
+        activation = app.handle("GET", f"/api/v1/identity/{compact}/activation")
+        self.assertEqual(activation.status, 200, activation.body)
+        genesis = app.handle("GET", f"/api/v1/identity/{compact}/genesis")
+        genesis_path = self.root / "activation-genesis.json"
+        activation_path = self.root / "identity-activation.json"
+        genesis_path.write_bytes(genesis.body)
+        activation_path.write_bytes(activation.body)
+        report = verify_identity_activation(
+            genesis_path, activation_path, RP_ID, ORIGIN
+        )
+        self.assertTrue(report["user_verified"])
         activated = app.handle(
             "POST",
             f"/api/v1/seals/{created['seal_id']}/webauthn/options",
@@ -549,6 +655,43 @@ class LowLevelTests(unittest.TestCase):
             repository / "publickey_kkagaya@mail.kitami-it.ac.jp.asc",
             "85F79058BD83EB3889DEF766B065C54586067E2E",
         )
+
+    def test_existing_identity_table_gains_passkey_activation_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "legacy.sqlite3"
+            with sqlite3.connect(database) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE identities (
+                        orcid TEXT PRIMARY KEY,
+                        genesis_json BLOB NOT NULL,
+                        genesis_digest TEXT NOT NULL,
+                        status TEXT NOT NULL CHECK (
+                            status IN ('pending_openpgp', 'active')
+                        ),
+                        openpgp_signature BLOB,
+                        created_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL
+                    )
+                    """
+                )
+            store = Store(database)
+            store.initialize()
+            with store.connect() as connection:
+                columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(identities)")
+                }
+            self.assertTrue(
+                {
+                    "activation_method",
+                    "activation_payload",
+                    "activation_challenge",
+                    "activation_expires_at",
+                    "activation_proof",
+                    "activation_digest",
+                }.issubset(columns)
+            )
 
 
 if __name__ == "__main__":

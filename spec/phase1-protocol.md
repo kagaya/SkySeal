@@ -1,8 +1,8 @@
 # SkySeal Phase 1 protocol
 
-Status: reference implementation baseline  
-Version: 1.0.0-draft.1  
-Date: 2026-08-29
+Status: reference implementation baseline
+Version: 1.1.0-draft.1
+Date: 2026-08-30
 
 This protocol connects a PC-local hash commitment to approval by an
 ORCID-bound WebAuthn credential. Original files, file names, paths, and the
@@ -15,6 +15,8 @@ hash list itself do not cross the PC-to-service boundary.
   protocol state.
 - ORCID OAuth authenticates the researcher's ORCID iD but cannot approve a
   seal by itself.
+- A separate User-Verified WebAuthn assertion activates the canonical genesis
+  for that ORCID. The public activation proof binds the two.
 - A WebAuthn assertion with User Present and User Verified approves the exact
   canonical seal payload.
 - The relying-party ID and origin are deployment trust anchors. Bundle values
@@ -65,7 +67,7 @@ the COSE public key, and stores the credential ID only in its private database.
 Production redirect URIs and cookies require HTTPS. Mock ORCID login and HTTP
 localhost are disabled unless the explicit development setting is active.
 
-## 4. Passkey registration and identity genesis
+## 4. Passkey registration and identity activation
 
 1. `POST /api/v1/webauthn/registration/options` returns a random 32-byte
    challenge and stable private user handle.
@@ -75,12 +77,33 @@ localhost are disabled unless the explicit development setting is active.
    stores the private credential routing record.
 4. The first credential creates a canonical identity-genesis record. Its
    public form contains the public key but not the raw credential ID.
-5. The identity remains `pending_openpgp` until the detached signature by the
-   pinned OpenPGP primary fingerprint is verified offline.
+5. The identity remains `pending_activation` until a second, User-Verified
+   Passkey assertion activates that exact genesis.
 
-The canonical genesis can be downloaded from
-`GET /api/v1/identity/{orcid}/genesis` and signed on an existing trusted PC.
-The service never receives or accesses the OpenPGP secret key.
+`POST /api/v1/identity/activation/options` creates a canonical payload with the
+ORCID iD, identity version, canonical genesis digest, fixed RP ID, 256-bit
+nonce, and creation time. The WebAuthn challenge is:
+
+```text
+SHA256(
+  UTF8("SkySeal Identity Activation Challenge v1\0") ||
+  JCS(identity_activation_payload)
+)
+```
+
+`POST /api/v1/identity/activation/assertion` requires the same authenticated
+ORCID session, verifies the credential owner, RP ID, exact origin, challenge,
+User Present, User Verified, and signature, and consumes the challenge once.
+It then publishes canonical `identity-activation.json`. The proof contains the
+assertion bytes and verification hints, but not the raw credential ID or user
+handle. Its canonical SHA-256 digest becomes the identity-state digest used by
+later seal payloads.
+
+The canonical records are available from
+`GET /api/v1/identity/{orcid}/genesis` and
+`GET /api/v1/identity/{orcid}/activation`. The legacy OpenPGP fingerprint field
+in an existing draft v1 genesis is optional metadata; no OpenPGP signature is
+required by this activation protocol.
 
 ## 5. PC seal transaction
 
@@ -137,9 +160,9 @@ idempotent; a different assertion is rejected.
 
 The reference service produces and returns bundles but does not push them to
 GitHub or submit them to OpenTimestamps. Those background workers are Phase 2.
-An identity without a verified OpenPGP bootstrap cannot approve a production
-seal. Development bypass is explicit, visible in the UI and report, and must
-not be enabled on a public deployment.
+An identity without a verified ORCID-and-Passkey activation cannot approve a
+production seal or receive a Drive-agent token. Development bypass is explicit,
+visible in the UI and report, and must not be enabled on a public deployment.
 
 ## 8. Authoritative references
 
