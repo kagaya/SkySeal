@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# Pull and apply a production SkySeal update with backups and health checks.
+
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+REPOSITORY=/opt/skyseal
+INTERNAL_APPLY=0
+TIMERS_STOPPED=0
+LOCK_HELD=0
+
+log() {
+  printf '[skyseal-update] %s\n' "$*"
+}
+
+fail() {
+  printf '[skyseal-update] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+  if ((LOCK_HELD)); then
+    flock -u 9 || true
+    exec 9>&-
+  fi
+  if ((TIMERS_STOPPED)); then
+    systemctl start skyseal-drive-agent.timer skyseal-ots-upgrade.timer || true
+  fi
+  exit "$status"
+}
+
+trap cleanup EXIT
+
+usage() {
+  cat <<'EOF'
+Usage: sudo skyseal-update
+
+Pull the fast-forward-only main branch, back up both SQLite databases, update
+Python dependencies and systemd units, safely reconcile the managed Caddyfile,
+localize existing public evidence, restart services, and run health checks.
+EOF
+}
+
+while (($#)); do
+  case "$1" in
+    --apply-after-pull)
+      INTERNAL_APPLY=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      fail "unknown option: $1"
+      ;;
+  esac
+done
+
+((EUID == 0)) || fail "run with sudo: sudo skyseal-update"
+[[ -d "$REPOSITORY/.git" ]] || fail "SkySeal repository not found: $REPOSITORY"
+
+if ((INTERNAL_APPLY == 0)); then
+  [[ -z "$(git -C "$REPOSITORY" status --porcelain --untracked-files=no)" ]] || \
+    fail "tracked repository changes must be reviewed before updating"
+  log "Pulling origin/main"
+  git -C "$REPOSITORY" pull --ff-only origin main
+  exec /bin/bash "$REPOSITORY/deploy/skyseal-update" --apply-after-pull
+fi
+
+for command in caddy curl flock git install runuser sha256sum systemctl systemd-analyze; do
+  command -v "$command" >/dev/null 2>&1 || fail "required command is missing: $command"
+done
+
+[[ "$(git -C "$REPOSITORY" branch --show-current)" == main ]] || \
+  fail "production checkout must be on main"
+[[ -z "$(git -C "$REPOSITORY" status --porcelain --untracked-files=no)" ]] || \
+  fail "tracked repository changes appeared during update"
+
+COMMIT="$(git -C "$REPOSITORY" rev-parse --short=12 HEAD)"
+SERVICE_PYTHON="$REPOSITORY/.venv/bin/python"
+SERVICE_PIP="$REPOSITORY/.venv/bin/pip"
+AGENT_PYTHON="$REPOSITORY/.venv-agent/bin/python"
+AGENT_PIP="$REPOSITORY/.venv-agent/bin/pip"
+[[ -x "$SERVICE_PYTHON" && -x "$SERVICE_PIP" ]] || fail "service virtual environment is missing"
+[[ -x "$AGENT_PYTHON" && -x "$AGENT_PIP" ]] || fail "agent virtual environment is missing"
+id -u skyseal >/dev/null 2>&1 || fail "skyseal account is missing"
+id -u skyseal-agent >/dev/null 2>&1 || fail "skyseal-agent account is missing"
+[[ -f /etc/skyseal/service.env ]] || fail "service configuration is missing"
+[[ -f /etc/skyseal-agent/agent.env ]] || fail "agent configuration is missing"
+
+log "Waiting for any active Drive-agent pass"
+TIMERS_STOPPED=1
+systemctl stop skyseal-drive-agent.timer skyseal-ots-upgrade.timer
+exec 9>/var/lib/skyseal-agent/drive-agent.lock
+flock --wait 120 9 || fail "Drive agent did not become idle within 120 seconds"
+LOCK_HELD=1
+
+log "Preparing private and public state directories"
+install -d -o skyseal -g skyseal -m 0700 /var/lib/skyseal/backups
+install -d -o skyseal-agent -g skyseal-agent -m 0700 /var/lib/skyseal-agent/backups
+install -d -o skyseal-agent -g skyseal-agent -m 0755 \
+  /var/lib/skyseal-public /var/lib/skyseal-public/evidence
+
+backup_sqlite() {
+  local account=$1
+  local python=$2
+  local source=$3
+  local destination=$4
+  [[ -e "$source" ]] || return 0
+  [[ ! -e "$destination" ]] || return 0
+  runuser -u "$account" -- "$python" - "$source" "$destination" <<'PY'
+import os
+import sqlite3
+import sys
+
+source_path, destination_path = sys.argv[1:]
+previous_umask = os.umask(0o077)
+try:
+    source = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+    destination = sqlite3.connect(destination_path)
+    try:
+        source.backup(destination)
+    finally:
+        destination.close()
+        source.close()
+finally:
+    os.umask(previous_umask)
+PY
+}
+
+log "Backing up SQLite state for $COMMIT"
+backup_sqlite skyseal "$SERVICE_PYTHON" \
+  /var/lib/skyseal/skyseal.sqlite3 \
+  "/var/lib/skyseal/backups/skyseal.sqlite3.before-$COMMIT"
+backup_sqlite skyseal-agent "$AGENT_PYTHON" \
+  /var/lib/skyseal-agent/drive-agent.sqlite3 \
+  "/var/lib/skyseal-agent/backups/drive-agent.sqlite3.before-$COMMIT"
+
+log "Updating isolated Python environments"
+"$SERVICE_PIP" install --disable-pip-version-check \
+  -r "$REPOSITORY/verifier/requirements.txt"
+"$AGENT_PIP" install --disable-pip-version-check \
+  -r "$REPOSITORY/verifier/requirements.txt" \
+  -r "$REPOSITORY/drive_agent/requirements.txt"
+
+log "Installing and validating systemd units"
+install -o root -g root -m 0644 \
+  "$REPOSITORY/deploy/skyseal.service" \
+  "$REPOSITORY/deploy/skyseal-drive-agent.service" \
+  "$REPOSITORY/deploy/skyseal-drive-agent.timer" \
+  "$REPOSITORY/deploy/skyseal-ots-upgrade.service" \
+  "$REPOSITORY/deploy/skyseal-ots-upgrade.timer" \
+  /etc/systemd/system/
+systemctl daemon-reload
+systemd-analyze verify \
+  /etc/systemd/system/skyseal.service \
+  /etc/systemd/system/skyseal-drive-agent.service \
+  /etc/systemd/system/skyseal-drive-agent.timer \
+  /etc/systemd/system/skyseal-ots-upgrade.service \
+  /etc/systemd/system/skyseal-ots-upgrade.timer
+
+log "Localizing all existing public evidence"
+runuser -u skyseal-agent -- env \
+  XDG_CACHE_HOME=/var/lib/skyseal-agent/cache \
+  PATH=/opt/skyseal/.venv-agent/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin \
+  bash -c 'set -a; . /etc/skyseal-agent/agent.env; set +a; exec /opt/skyseal/.venv-agent/bin/python /opt/skyseal/drive_agent/agent.py localize'
+
+log "Restarting the public service"
+systemctl restart skyseal.service
+systemctl is-active --quiet skyseal.service || fail "skyseal.service did not start"
+curl --retry 8 --retry-delay 1 --retry-all-errors -fsS \
+  http://127.0.0.1:8787/proofs/ >/dev/null
+
+install_caddyfile() {
+  local candidate="$REPOSITORY/deploy/Caddyfile.example"
+  local installed=/etc/caddy/Caddyfile
+  local marker=/etc/caddy/.skyseal-managed.sha256
+  local backup_directory=/etc/caddy/skyseal-backups
+  local next=/etc/caddy/Caddyfile.skyseal-next
+  [[ -f "$installed" && ! -L "$installed" ]] || fail "installed Caddyfile is unsafe or missing"
+  [[ -f "$candidate" && ! -L "$candidate" ]] || fail "candidate Caddyfile is unsafe or missing"
+  caddy validate --config "$candidate"
+  local current_hash candidate_hash managed_hash
+  current_hash="$(sha256sum "$installed" | cut -d' ' -f1)"
+  candidate_hash="$(sha256sum "$candidate" | cut -d' ' -f1)"
+  if [[ -f "$marker" ]]; then
+    managed_hash="$(tr -d ' \n\r\t' <"$marker")"
+    [[ "$managed_hash" =~ ^[0-9a-f]{64}$ ]] || fail "managed Caddyfile marker is invalid"
+    [[ "$current_hash" == "$managed_hash" ]] || \
+      fail "Caddyfile has local changes; review them instead of overwriting"
+  elif [[ "$current_hash" != "$candidate_hash" ]]; then
+    fail "Caddyfile is not yet managed and differs from the repository"
+  fi
+  if [[ "$current_hash" != "$candidate_hash" ]]; then
+    install -d -o root -g root -m 0700 "$backup_directory"
+    install -o root -g root -m 0600 "$installed" \
+      "$backup_directory/Caddyfile.$current_hash"
+    install -o root -g root -m 0644 "$candidate" "$next"
+    caddy validate --config "$next"
+    mv "$next" "$installed"
+    if ! systemctl reload caddy; then
+      install -o root -g root -m 0644 \
+        "$backup_directory/Caddyfile.$current_hash" "$installed"
+      systemctl reload caddy || true
+      fail "Caddy reload failed; the previous configuration was restored"
+    fi
+  fi
+  printf '%s\n' "$candidate_hash" >"$marker.tmp"
+  chmod 0600 "$marker.tmp"
+  mv "$marker.tmp" "$marker"
+}
+
+log "Reconciling the managed Caddy configuration"
+install_caddyfile
+systemctl is-active --quiet caddy || fail "caddy is not active"
+
+log "Installing the reusable update command"
+install -o root -g root -m 0755 "$REPOSITORY/deploy/skyseal-update" \
+  /usr/local/sbin/skyseal-update
+
+flock -u 9
+exec 9>&-
+LOCK_HELD=0
+
+log "Starting recurring jobs and one verification pass"
+systemctl enable --now skyseal-drive-agent.timer skyseal-ots-upgrade.timer
+TIMERS_STOPPED=0
+systemctl start skyseal-drive-agent.service
+
+log "Checking public endpoints"
+curl --retry 8 --retry-delay 1 --retry-all-errors -fsS \
+  https://proof.excyberlab.net/ >/dev/null
+curl --retry 8 --retry-delay 1 --retry-all-errors -fsS \
+  https://proof.excyberlab.net/proofs/ >/dev/null
+
+systemctl is-active --quiet skyseal.service caddy \
+  skyseal-drive-agent.timer skyseal-ots-upgrade.timer || \
+  fail "one or more production units are inactive"
+
+log "Update completed at commit $COMMIT"
+printf 'Public evidence: https://proof.excyberlab.net/proofs/\n'

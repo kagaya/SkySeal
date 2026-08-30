@@ -114,6 +114,28 @@ sudo systemctl reload caddy
 curl -I https://proof.excyberlab.net/
 ```
 
+### 定常更新
+
+初回構築と秘密情報の配置が完了したVPSでは、以後の更新を次の一コマンドにまとめる。
+
+```bash
+sudo skyseal-update
+```
+
+このコマンドは `origin/main` のfast-forward取得、両SQLiteのオンラインバックアップ、
+Python依存関係とsystemd unitの更新、既存証拠のVPS配置、サービス再起動、公開URLの
+疎通確認を順に行う。Caddyfileは最後に配置したハッシュを記録し、手修正がある場合は
+上書きせず停止する。バックアップは各状態ディレクトリの `backups/` にcommit単位で
+mode 600保存する。
+
+更新コマンド自体を初めて登録するときだけ、最新のcheckoutから次を実行する。
+
+```bash
+sudo install -o root -g root -m 0755 \
+  /opt/skyseal/deploy/skyseal-update /usr/local/sbin/skyseal-update
+sudo skyseal-update
+```
+
 ## 初回本人登録
 
 1. iPhone / iPad の Safari で `https://proof.excyberlab.net/` を開く。
