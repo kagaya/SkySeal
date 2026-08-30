@@ -11,6 +11,7 @@ Group=skyseal-agent
 WorkingDirectory=/opt/skyseal
 EnvironmentFile=/etc/skyseal-agent/agent.env
 Environment=PATH=/opt/skyseal/.venv-agent/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=XDG_CACHE_HOME=/var/lib/skyseal-agent/cache
 StateDirectory=skyseal-agent
 StateDirectoryMode=0700
 UMask=0077
