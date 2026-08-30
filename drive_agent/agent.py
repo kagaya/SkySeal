@@ -25,6 +25,7 @@ from drive_agent.google_drive import (  # noqa: E402
 )
 from drive_agent.publication import (  # noqa: E402
     GitHubPublisher,
+    LocalEvidencePublisher,
     OpenTimestampsClient,
     PublicationError,
     PublicationWorker,
@@ -114,8 +115,22 @@ class AgentRuntime:
                 result.activation_ots,
                 result.prefix,
             )
-            events.append({"seal_id": job["seal_id"], "event": "published"})
+            events.append({"seal_id": job["seal_id"], "event": "published_locally"})
+        self._mirror_pending(events)
         return events
+
+    def _mirror_pending(self, events: list[dict[str, str]]) -> None:
+        for job in self.store.jobs_needing_github_mirror():
+            try:
+                self.publisher.mirror(job, updating=True)
+            except PublicationError as exc:
+                self.store.mark_github_pending(job["seal_id"], str(exc))
+                events.append(
+                    {"seal_id": job["seal_id"], "event": "github_mirror_pending"}
+                )
+                continue
+            self.store.mark_github_synced(job["seal_id"])
+            events.append({"seal_id": job["seal_id"], "event": "github_mirrored"})
 
     def upgrade(self) -> list[dict[str, str]]:
         events: list[dict[str, str]] = []
@@ -125,6 +140,14 @@ class AgentRuntime:
                 job["seal_id"], result.bundle_ots, result.activation_ots
             )
             events.append({"seal_id": job["seal_id"], "event": "timestamps_upgraded"})
+        self._mirror_pending(events)
+        return events
+
+    def localize(self) -> list[dict[str, str]]:
+        events: list[dict[str, str]] = []
+        for job in self.store.jobs_with_status("published"):
+            self.publisher.ensure_local(job, str(job["github_status"]))
+            events.append({"seal_id": job["seal_id"], "event": "available_locally"})
         return events
 
 
@@ -150,6 +173,7 @@ def build_runtime(config: AgentConfig) -> AgentRuntime:
         work_directory=config.work_directory,
         github_prefix=config.github_prefix,
         ots=OpenTimestampsClient(),
+        local=LocalEvidencePublisher(config.public_root),
         github=github,
     )
     return AgentRuntime(config, drive, skyseal, publisher, store)
@@ -164,7 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=("scan", "collect", "run-once", "run", "upgrade", "pending"),
+        choices=("scan", "collect", "run-once", "run", "upgrade", "localize", "pending"),
     )
     return parser
 
@@ -183,6 +207,8 @@ def main(argv: list[str] | None = None) -> int:
             print_events(runtime.collect())
         elif args.command == "upgrade":
             print_events(runtime.upgrade())
+        elif args.command == "localize":
+            print_events(runtime.localize())
         elif args.command == "pending":
             for job in runtime.store.jobs_with_status("pending_approval", "approved"):
                 print_events(

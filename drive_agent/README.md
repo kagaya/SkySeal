@@ -2,7 +2,8 @@
 
 The agent watches one private Google Drive inbox, hashes stable sealing units,
 creates ORCID-bound approval requests, retrieves approved evidence, verifies it,
-stamps it with OpenTimestamps, and publishes an opaque package to GitHub. The
+stamps it with OpenTimestamps, persists an opaque package on the VPS, and then
+mirrors that package to GitHub. The
 original remains in Google Drive; bytes are streamed through the agent for
 hashing and are not persisted as source-file copies.
 
@@ -83,10 +84,14 @@ After upload and the settle interval, open the installed SkySeal PWA on an
 iPhone or iPad. The pending card shows only arrival time and hash count. Tap the
 request and approve it with the passkey. `collect` then verifies the ORCID-bound
 identity activation and seal signatures, timestamps both public proofs, and
-publishes the package. Run `upgrade` later to add confirmed Bitcoin paths to
+publishes the package locally before attempting the GitHub mirror. A GitHub
+failure leaves the package visible at `/proofs/` and is retried independently.
+Run `upgrade` later to add confirmed Bitcoin paths to
 pending OTS proofs.
 
 The SQLite database and its WAL files are private state. Do not publish them.
+The public root contains only the seven manifest-controlled public artifacts
+and a discovery index; it must never receive raw Drive bytes.
 
 On the production Sakura VPS, use the automated deployment described in
 `deploy/README.ja.md` instead of performing these steps individually.

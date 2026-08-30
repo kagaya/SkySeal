@@ -4,6 +4,8 @@ import base64
 import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 import urllib.error
@@ -25,6 +27,10 @@ class PublicationError(RuntimeError):
     pass
 
 
+PUBLIC_INDEX_SCHEMA = "urn:skyseal:public-evidence-index:v1"
+PUBLIC_COMPONENT_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
 def sha256_prefixed(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
@@ -33,6 +39,186 @@ def ensure_private_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name == "posix":
         os.chmod(path, 0o700)
+
+
+class LocalEvidencePublisher:
+    """Persist complete public packages locally before any remote mirroring."""
+
+    def __init__(self, root: Path):
+        self.root = root.resolve()
+
+    @staticmethod
+    def _components(prefix: str) -> tuple[str, ...]:
+        components = tuple(prefix.split("/"))
+        if not components or any(
+            not component or PUBLIC_COMPONENT_RE.fullmatch(component) is None
+            for component in components
+        ):
+            raise PublicationError("invalid local publication prefix")
+        return components
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        if os.name != "posix":
+            return
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _write_new(path: Path, content: bytes) -> None:
+        with path.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(path, 0o644)
+
+    @classmethod
+    def _replace(cls, path: Path, content: bytes) -> None:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", dir=path.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary, 0o644)
+            os.replace(temporary, path)
+            cls._fsync_directory(path.parent)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
+    def _target(self, prefix: str) -> Path:
+        components = self._components(prefix)
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o755)
+        os.chmod(self.root, 0o755)
+        current = self.root
+        for component in components[:-1]:
+            current = current / component
+            if current.is_symlink():
+                raise PublicationError("local publication parent is a symlink")
+            current.mkdir(exist_ok=True, mode=0o755)
+            if not current.is_dir():
+                raise PublicationError("local publication parent is not a directory")
+            os.chmod(current, 0o755)
+        return current / components[-1]
+
+    @property
+    def index_path(self) -> Path:
+        return self.root / "index.json"
+
+    def _read_index(self) -> list[dict[str, object]]:
+        if not self.index_path.exists():
+            return []
+        try:
+            document = json.loads(self.index_path.read_bytes())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PublicationError("local publication index is unreadable") from exc
+        if (
+            not isinstance(document, dict)
+            or set(document) != {"schema", "publications"}
+            or document.get("schema") != PUBLIC_INDEX_SCHEMA
+            or not isinstance(document.get("publications"), list)
+        ):
+            raise PublicationError("local publication index is invalid")
+        return list(document["publications"])
+
+    def _write_index(self, records: list[dict[str, object]]) -> None:
+        document = {
+            "schema": PUBLIC_INDEX_SCHEMA,
+            "publications": sorted(
+                records,
+                key=lambda record: (str(record["created_at"]), str(record["seal_id"])),
+                reverse=True,
+            ),
+        }
+        self._replace(self.index_path, canonical_json(document) + b"\n")
+
+    def _update_index(
+        self,
+        summary: Mapping[str, object],
+        github_mirror: str,
+    ) -> None:
+        if github_mirror not in {"pending", "synced"}:
+            raise PublicationError("invalid GitHub mirror state")
+        required = {"seal_id", "created_at", "entry_count", "identity_id", "relative_path"}
+        if set(summary) != required:
+            raise PublicationError("local publication summary is invalid")
+        records = self._read_index()
+        replacement = dict(summary)
+        replacement["github_mirror"] = github_mirror
+        found = False
+        for index, existing in enumerate(records):
+            if not isinstance(existing, dict) or "seal_id" not in existing:
+                raise PublicationError("local publication index record is invalid")
+            if existing["seal_id"] != summary["seal_id"]:
+                continue
+            immutable = {key: existing.get(key) for key in required}
+            if immutable != dict(summary):
+                raise PublicationError("refusing to replace local publication metadata")
+            records[index] = replacement
+            found = True
+            break
+        if not found:
+            records.append(replacement)
+        self._write_index(records)
+
+    def publish(
+        self,
+        prefix: str,
+        artifacts: Mapping[str, bytes],
+        manifest: bytes,
+        summary: Mapping[str, object],
+        *,
+        updating: bool,
+    ) -> None:
+        package = dict(artifacts)
+        package["manifest.json"] = manifest
+        target = self._target(prefix)
+        if target.is_symlink():
+            raise PublicationError("local publication target is a symlink")
+        if not target.exists():
+            staging = Path(tempfile.mkdtemp(prefix=".skyseal-package-", dir=target.parent))
+            try:
+                for name, content in sorted(package.items()):
+                    if PUBLIC_COMPONENT_RE.fullmatch(name) is None:
+                        raise PublicationError("invalid local artifact name")
+                    self._write_new(staging / name, content)
+                self._fsync_directory(staging)
+                os.chmod(staging, 0o755)
+                os.rename(staging, target)
+                self._fsync_directory(target.parent)
+            finally:
+                if staging.exists():
+                    shutil.rmtree(staging)
+        else:
+            if not target.is_dir():
+                raise PublicationError("local publication target is not a directory")
+            immutable_names = {
+                name for name in package if not name.endswith(".ots") and name != "manifest.json"
+            }
+            for name in immutable_names:
+                path = target / name
+                if not path.is_file() or path.read_bytes() != package[name]:
+                    raise PublicationError("refusing to replace immutable local evidence")
+            if not updating:
+                for name, content in package.items():
+                    path = target / name
+                    if not path.is_file() or path.read_bytes() != content:
+                        raise PublicationError("refusing to replace different local evidence")
+            else:
+                for name in sorted(name for name in package if name.endswith(".ots")):
+                    self._replace(target / name, package[name])
+                self._replace(target / "manifest.json", manifest)
+        self._update_index(summary, "pending")
+
+    def set_github_mirror(self, summary: Mapping[str, object], status: str) -> None:
+        self._update_index(summary, status)
 
 
 class OpenTimestampsClient:
@@ -188,6 +374,7 @@ class PublicationWorker:
         work_directory: Path,
         github_prefix: str,
         ots: OpenTimestampsClient,
+        local: LocalEvidencePublisher,
         github: GitHubPublisher,
     ):
         self.trusted_rp_id = trusted_rp_id
@@ -195,6 +382,7 @@ class PublicationWorker:
         self.work_directory = work_directory
         self.github_prefix = github_prefix.strip("/")
         self.ots = ots
+        self.local = local
         self.github = github
 
     def _verified_base(self, job: Mapping[str, object]) -> tuple[str, dict[str, bytes]]:
@@ -286,6 +474,39 @@ class PublicationWorker:
             )
         self.github.put(f"{prefix}/manifest.json", manifest, allow_update=updating)
 
+    @staticmethod
+    def _summary(prefix: str, artifacts: Mapping[str, bytes]) -> dict[str, object]:
+        bundle = parse_json_bytes(artifacts["seal.skyseal.json"], "approved bundle")
+        try:
+            payload = bundle["seal_payload"]
+            identity_id = payload["identity_id"]
+            created_at = payload["created_at"]
+            seal_id = payload["seal_id"]
+        except (KeyError, TypeError) as exc:
+            raise PublicationError("approved bundle is missing public summary fields") from exc
+        if not all(isinstance(value, str) and value for value in (identity_id, created_at, seal_id)):
+            raise PublicationError("approved bundle has invalid public summary fields")
+        if prefix.rsplit("/", 1)[-1] != seal_id:
+            raise PublicationError("publication prefix does not match the seal ID")
+        return {
+            "seal_id": seal_id,
+            "created_at": created_at,
+            "entry_count": artifacts["hashes.txt"].count(b"\n"),
+            "identity_id": identity_id,
+            "relative_path": prefix,
+        }
+
+    def _complete_artifacts(
+        self, job: Mapping[str, object]
+    ) -> tuple[str, dict[str, bytes], bytes, dict[str, object]]:
+        prefix, artifacts = self._verified_base(job)
+        if job["ots_proof"] is None or job["identity_ots_proof"] is None:
+            raise PublicationError("approved job has not stored its timestamp proofs")
+        artifacts["seal.skyseal.json.ots"] = bytes(job["ots_proof"])
+        artifacts["identity-activation.json.ots"] = bytes(job["identity_ots_proof"])
+        manifest = self._manifest(prefix.rsplit("/", 1)[-1], artifacts)
+        return prefix, artifacts, manifest, self._summary(prefix, artifacts)
+
     def stamp(self, job: Mapping[str, object]) -> PublicationResult:
         prefix, artifacts = self._verified_base(job)
         bundle_ots = self.ots.stamp(
@@ -299,15 +520,35 @@ class PublicationWorker:
         return PublicationResult(prefix, bundle_ots, activation_ots)
 
     def publish(self, job: Mapping[str, object]) -> PublicationResult:
-        prefix, artifacts = self._verified_base(job)
-        if job["ots_proof"] is None or job["identity_ots_proof"] is None:
-            raise PublicationError("approved job has not stored its timestamp proofs")
-        bundle_ots = bytes(job["ots_proof"])
-        activation_ots = bytes(job["identity_ots_proof"])
-        artifacts["seal.skyseal.json.ots"] = bundle_ots
-        artifacts["identity-activation.json.ots"] = activation_ots
-        self._upload(prefix, artifacts, updating=False)
-        return PublicationResult(prefix, bundle_ots, activation_ots)
+        prefix, artifacts, manifest, summary = self._complete_artifacts(job)
+        self.local.publish(prefix, artifacts, manifest, summary, updating=False)
+        return PublicationResult(
+            prefix,
+            artifacts["seal.skyseal.json.ots"],
+            artifacts["identity-activation.json.ots"],
+        )
+
+    def mirror(self, job: Mapping[str, object], *, updating: bool) -> PublicationResult:
+        prefix, artifacts, _, summary = self._complete_artifacts(job)
+        self._upload(prefix, artifacts, updating=updating)
+        self.local.set_github_mirror(summary, "synced")
+        return PublicationResult(
+            prefix,
+            artifacts["seal.skyseal.json.ots"],
+            artifacts["identity-activation.json.ots"],
+        )
+
+    def ensure_local(self, job: Mapping[str, object], github_status: str) -> PublicationResult:
+        prefix, artifacts, manifest, summary = self._complete_artifacts(job)
+        self.local.publish(prefix, artifacts, manifest, summary, updating=True)
+        self.local.set_github_mirror(
+            summary, "synced" if github_status == "synced" else "pending"
+        )
+        return PublicationResult(
+            prefix,
+            artifacts["seal.skyseal.json.ots"],
+            artifacts["identity-activation.json.ots"],
+        )
 
     def upgrade(self, job: Mapping[str, object]) -> PublicationResult:
         prefix, artifacts = self._verified_base(job)
@@ -327,5 +568,7 @@ class PublicationWorker:
         )
         artifacts["seal.skyseal.json.ots"] = bundle_ots
         artifacts["identity-activation.json.ots"] = activation_ots
-        self._upload(prefix, artifacts, updating=True)
+        manifest = self._manifest(prefix.rsplit("/", 1)[-1], artifacts)
+        summary = self._summary(prefix, artifacts)
+        self.local.publish(prefix, artifacts, manifest, summary, updating=True)
         return PublicationResult(prefix, bundle_ots, activation_ots)

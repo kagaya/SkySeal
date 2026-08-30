@@ -102,7 +102,7 @@ OpenTimestamps stamps the exact WebAuthn bundle and the exact
 confirmation. A later `upgrade` operation replaces only the `.ots` proof and
 the manifest that records its digest.
 
-GitHub paths are derived only from the public creation month and random UUIDv7:
+VPS and GitHub paths are derived only from the public creation month and random UUIDv7:
 
 ```text
 evidence/YYYY/MM/<seal-id>/
@@ -115,7 +115,10 @@ evidence/YYYY/MM/<seal-id>/
   manifest.json
 ```
 
-`manifest.json` uses `urn:skyseal:publication-manifest:v2` and is uploaded last.
+`manifest.json` uses `urn:skyseal:publication-manifest:v2`. The complete package
+is written atomically to the VPS public root first. It then appears through
+`/proofs/` and `/evidence/` independently of GitHub. The same bytes are mirrored
+to GitHub with the manifest uploaded last.
 It contains SHA-256 digests of every other artifact and the two proof-to-target
 relationships. Publication is idempotent:
 identical existing files are accepted, different evidence files are never
@@ -139,8 +142,10 @@ can make closely timed submissions correlatable. These are explicit v1 limits.
 - A changing unit returns to the settling state.
 - A checksum mismatch prevents submission.
 - Expired, rejected, or invalidated approvals become private error records.
-- Timestamp proofs are stored privately before GitHub upload, so a partial
-  GitHub failure can resume without creating a different proof.
+- Timestamp proofs are stored privately and the complete public package is
+  persisted on the VPS before GitHub mirroring.
+- A GitHub failure does not undo local publication. Mirror state remains
+  pending and is retried without creating a different proof.
 - GitHub files are written serially; the final manifest signals a complete
   package.
 - Raw Drive data is streamed and is never written into the public staging

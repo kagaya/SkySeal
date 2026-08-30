@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     ots_proof BLOB,
     identity_ots_proof BLOB,
     publication_prefix TEXT,
+    github_status TEXT NOT NULL DEFAULT 'pending',
+    github_error TEXT,
     error_code TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
@@ -83,6 +85,15 @@ class AgentStore:
                     connection.execute("ALTER TABLE jobs ADD COLUMN identity_activation BLOB")
                 if "identity_ots_proof" not in job_columns:
                     connection.execute("ALTER TABLE jobs ADD COLUMN identity_ots_proof BLOB")
+                if "github_status" not in job_columns:
+                    connection.execute(
+                        "ALTER TABLE jobs ADD COLUMN github_status TEXT NOT NULL DEFAULT 'pending'"
+                    )
+                    connection.execute(
+                        "UPDATE jobs SET github_status = 'synced' WHERE status = 'published'"
+                    )
+                if "github_error" not in job_columns:
+                    connection.execute("ALTER TABLE jobs ADD COLUMN github_error TEXT")
         finally:
             os.umask(previous_umask)
         for candidate in (
@@ -217,6 +228,18 @@ class AgentStore:
                 ).fetchall()
             )
 
+    def jobs_needing_github_mirror(self) -> list[sqlite3.Row]:
+        with self.connect() as connection:
+            return list(
+                connection.execute(
+                    """
+                    SELECT * FROM jobs
+                    WHERE status = 'published' AND github_status != 'synced'
+                    ORDER BY created_at, job_id
+                    """
+                ).fetchall()
+            )
+
     def store_approved_artifacts(
         self,
         seal_id: str,
@@ -274,6 +297,7 @@ class AgentStore:
                 """
                 UPDATE jobs
                 SET status = 'published', ots_proof = ?, identity_ots_proof = ?, publication_prefix = ?,
+                    github_status = 'pending', github_error = NULL,
                     updated_at = ?, error_code = NULL
                 WHERE seal_id = ? AND status IN ('approved', 'published')
                 """,
@@ -288,13 +312,41 @@ class AgentStore:
         with self.connect() as connection:
             cursor = connection.execute(
                 """
-                UPDATE jobs SET ots_proof = ?, identity_ots_proof = ?, updated_at = ?
+                UPDATE jobs
+                SET ots_proof = ?, identity_ots_proof = ?, github_status = 'pending',
+                    github_error = NULL, updated_at = ?
                 WHERE seal_id = ? AND status = 'published'
                 """,
                 (ots_proof, identity_ots_proof, int(time.time()), seal_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError("published job not found")
+
+    def mark_github_synced(self, seal_id: str) -> None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET github_status = 'synced', github_error = NULL, updated_at = ?
+                WHERE seal_id = ? AND status = 'published'
+                """,
+                (int(time.time()), seal_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("published job not found for GitHub mirror state")
+
+    def mark_github_pending(self, seal_id: str, error: str) -> None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET github_status = 'pending', github_error = ?, updated_at = ?
+                WHERE seal_id = ? AND status = 'published'
+                """,
+                (error[:120], int(time.time()), seal_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("published job not found for GitHub retry state")
 
     def mark_error(self, seal_id: str, error_code: str) -> None:
         with self.connect() as connection:

@@ -9,6 +9,7 @@ AGENT_USER=skyseal-agent
 AGENT_GROUP=skyseal-agent
 CONFIG_DIR=/etc/skyseal-agent
 STATE_DIR=/var/lib/skyseal-agent
+PUBLIC_DIR=/var/lib/skyseal-public
 GOOGLE_KEY=
 GITHUB_TOKEN=
 AGENT_TOKEN=/var/lib/skyseal/drive-agent.token.export
@@ -161,6 +162,7 @@ if ! id -u "$AGENT_USER" >/dev/null 2>&1; then
 fi
 install -d -o "$AGENT_USER" -g "$AGENT_GROUP" -m 0700 "$CONFIG_DIR" "$STATE_DIR"
 install -d -o "$AGENT_USER" -g "$AGENT_GROUP" -m 0700 "$STATE_DIR/work"
+install -d -o "$AGENT_USER" -g "$AGENT_GROUP" -m 0755 "$PUBLIC_DIR" "$PUBLIC_DIR/evidence"
 
 log "Installing the isolated Python environment"
 if [[ ! -x "$REPOSITORY/.venv-agent/bin/python" ]]; then
@@ -210,6 +212,7 @@ trap cleanup EXIT
   printf 'SKYSEAL_GITHUB_PREFIX=evidence\n'
   printf 'SKYSEAL_AGENT_DATABASE=%s\n' "$STATE_DIR/drive-agent.sqlite3"
   printf 'SKYSEAL_AGENT_WORK=%s\n' "$STATE_DIR/work"
+  printf 'SKYSEAL_PUBLIC_ROOT=%s\n' "$PUBLIC_DIR"
   printf 'SKYSEAL_DRIVE_SETTLE_SECONDS=120\n'
   printf 'SKYSEAL_DRIVE_POLL_SECONDS=30\n'
 } >"$ENVIRONMENT_FILE"

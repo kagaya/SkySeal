@@ -58,6 +58,7 @@ def exact_https_origin(value: str) -> str:
 class AgentConfig:
     database_path: Path
     work_directory: Path
+    public_root: Path
     google_service_account_file: Path
     drive_folder_id: str
     skyseal_server: str
@@ -114,6 +115,9 @@ class AgentConfig:
             ).expanduser().resolve(),
             work_directory=Path(
                 os.getenv("SKYSEAL_AGENT_WORK", str(root / "var" / "drive-agent-work"))
+            ).expanduser().resolve(),
+            public_root=Path(
+                os.getenv("SKYSEAL_PUBLIC_ROOT", "/var/lib/skyseal-public")
             ).expanduser().resolve(),
             google_service_account_file=private_file(
                 Path(required("SKYSEAL_GOOGLE_SERVICE_ACCOUNT")),

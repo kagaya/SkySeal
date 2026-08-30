@@ -73,6 +73,11 @@ def private_directory(path: Path) -> bool:
     return stat.S_ISDIR(mode) and not bool(mode & 0o077)
 
 
+def public_directory(path: Path) -> bool:
+    mode = path.stat().st_mode
+    return stat.S_ISDIR(mode) and mode & 0o777 == 0o755
+
+
 def check_state_path(checks: Checks, path: Path, label: str) -> None:
     parent = path.parent
     checks.require(parent.is_dir(), f"{label} parent directory does not exist: {parent}")
@@ -128,6 +133,19 @@ def check_service() -> int:
         "SKYSEAL_ORCID_CLIENT_SECRET is missing or still a placeholder",
     )
     check_state_path(checks, config.database_path, "service database")
+    checks.require(
+        config.public_root is not None and config.public_root.is_dir(),
+        f"public evidence root does not exist: {config.public_root}",
+    )
+    if config.public_root is not None and config.public_root.is_dir():
+        checks.require(
+            public_directory(config.public_root),
+            f"public evidence root must have mode 755: {config.public_root}",
+        )
+        checks.require(
+            os.access(config.public_root, os.R_OK),
+            f"public evidence root is not readable: {config.public_root}",
+        )
     return checks.finish()
 
 
@@ -175,6 +193,19 @@ def check_agent() -> int:
         checks.require(
             private_directory(config.work_directory.parent),
             f"agent work parent must have mode 700: {config.work_directory.parent}",
+        )
+    checks.require(
+        config.public_root.is_dir(),
+        f"public evidence root does not exist: {config.public_root}",
+    )
+    if config.public_root.is_dir():
+        checks.require(
+            public_directory(config.public_root),
+            f"public evidence root must have mode 755: {config.public_root}",
+        )
+        checks.require(
+            os.access(config.public_root, os.W_OK),
+            f"public evidence root is not writable: {config.public_root}",
         )
     checks.require(private_mode(config.google_service_account_file), "Google credential file must have mode 600")
     checks.require(private_mode(config.skyseal_agent_token_file), "SkySeal agent token must have mode 600")

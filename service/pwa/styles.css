@@ -88,6 +88,12 @@ pre, code {
 }
 pre { margin: 0; color: var(--muted); }
 #recovery-code { margin: 14px 0; font-size: 1rem; }
+.proof-list, .artifact-list { margin: 0; padding-left: 1.25rem; }
+.proof-list { display: grid; gap: 12px; }
+.proof-list li { display: grid; gap: 4px; }
+.proof-list span { color: var(--muted); font-size: .9rem; }
+.artifact-list { display: grid; gap: 8px; }
+a { color: var(--green); overflow-wrap: anywhere; }
 
 @media (max-width: 520px) {
   dl div { grid-template-columns: 1fr; gap: 3px; }

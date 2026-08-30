@@ -643,6 +643,55 @@ class ORCIDFlowTests(unittest.TestCase):
             self.assertEqual(replay.status, 400)
 
 
+class PublicEvidencePageTests(unittest.TestCase):
+    def test_local_publication_is_visible_without_login_or_github(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            public_root = root / "public"
+            public_root.mkdir()
+            seal_id = "018f0000-0000-7000-8000-000000000001"
+            index = {
+                "schema": "urn:skyseal:public-evidence-index:v1",
+                "publications": [
+                    {
+                        "seal_id": seal_id,
+                        "created_at": "2026-08-29T00:00:00Z",
+                        "entry_count": 3,
+                        "identity_id": ORCID,
+                        "relative_path": f"evidence/2026/08/{seal_id}",
+                        "github_mirror": "pending",
+                    }
+                ],
+            }
+            (public_root / "index.json").write_bytes(canonical_json(index) + b"\n")
+            app = Application(
+                Config(
+                    origin=ORIGIN,
+                    rp_id=RP_ID,
+                    database_path=root / "public-page.sqlite3",
+                    public_root=public_root,
+                )
+            )
+            listing = app.handle("GET", "/proofs/")
+            self.assertEqual(listing.status, 200)
+            listing_text = listing.body.decode()
+            self.assertIn(seal_id, listing_text)
+            self.assertIn("GitHub再試行中", listing_text)
+            detail = app.handle("GET", f"/proofs/{seal_id}")
+            self.assertEqual(detail.status, 200)
+            detail_text = detail.body.decode()
+            self.assertIn("VPS保存", detail_text)
+            self.assertIn("未同期・自動再試行中", detail_text)
+            self.assertIn(
+                f"/evidence/2026/08/{seal_id}/manifest.json", detail_text
+            )
+            self.assertNotIn("private-paper-name", detail_text)
+            missing = app.handle(
+                "GET", "/proofs/018f0000-0000-7000-8000-000000000002"
+            )
+            self.assertEqual(missing.status, 404)
+
+
 class LowLevelTests(unittest.TestCase):
     def test_cbor_rejects_indefinite_and_trailing_data(self) -> None:
         with self.assertRaises(CBORDecodeError):

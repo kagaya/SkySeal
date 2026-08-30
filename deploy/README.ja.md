@@ -149,11 +149,13 @@ sudo bash /opt/skyseal/deploy/bootstrap_agent_vps.sh --google-key /path/to/googl
 2. 公開サービスとは別のPython仮想環境へDrive APIとOpenTimestampsを導入する。
 3. 秘密ファイルと固定設定をmode 600で配置する。
 4. systemd sandbox設定を検査し、初回Drive scanを実行する。
-5. 1分ごとの監視timerと毎日のOpenTimestamps upgrade timerを有効化する。
+5. VPS公開領域 `/var/lib/skyseal-public` を作成する。
+6. 1分ごとの監視timerと毎日のOpenTimestamps upgrade timerを有効化する。
 
 公開Webサービスの `skyseal` ユーザーは `/etc/skyseal-agent` を読めない。systemdサービスは
-原ファイルを書き出せる場所を持たず、非公開SQLiteと作業領域だけを
-`/var/lib/skyseal-agent` に保持する。
+原ファイルを書き出さず、非公開SQLiteと作業領域を `/var/lib/skyseal-agent` に保持する。
+公開専用の `/var/lib/skyseal-public` には検証済み証拠だけを先に不可変保存し、GitHubは
+その後に作るミラーとして扱う。公開一覧は `https://proof.excyberlab.net/proofs/` で確認できる。
 
 Drive agent token は、本人登録を有効化した後、公開サービスホストで一度だけ生成する。
 
@@ -174,9 +176,10 @@ sudo -u skyseal /opt/skyseal/.venv/bin/python \
 2. 120秒変更せず待つ。
 3. iPhone / iPad の PWA に、ファイル名なしで到着時刻とハッシュ件数だけが出ることを確認する。
 4. Passkey で承認する。
-5. GitHub の `evidence/YYYY/MM/<opaque-seal-id>/` に、ハッシュ一覧、seal署名、
+5. `https://proof.excyberlab.net/proofs/` に証拠が現れ、各証拠ファイルをVPSから取得できることを確認する。
+6. GitHub の `evidence/YYYY/MM/<opaque-seal-id>/` に、ハッシュ一覧、seal署名、
    `identity-genesis.json`、`identity-activation.json`、両OpenTimestamps証明、および
    manifestが公開されることを確認する。
-6. 元ファイルを第三者へ渡さずに公開 verifier が成立し、別途同一ファイルを与えた場合だけ照合できることを確認する。
+7. 元ファイルを第三者へ渡さずに公開 verifier が成立し、別途同一ファイルを与えた場合だけ照合できることを確認する。
 
 本番の論文・データセットを入れるのは、このテストに合格してからにする。

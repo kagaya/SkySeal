@@ -63,6 +63,7 @@ class Config:
     session_lifetime_seconds: int = 8 * 60 * 60
     transaction_lifetime_seconds: int = 15 * 60
     assertion_lifetime_seconds: int = 5 * 60
+    public_root: Path | None = None
 
     def __post_init__(self) -> None:
         validate_service_origin(self.origin, self.allow_http_localhost)
@@ -119,4 +120,7 @@ class Config:
                 os.getenv("SKYSEAL_DEV_ALLOW_UNSEALED_IDENTITY")
             ),
             allow_http_localhost=allow_http,
+            public_root=Path(
+                os.getenv("SKYSEAL_PUBLIC_ROOT", "/var/lib/skyseal-public")
+            ).resolve(),
         )

@@ -19,6 +19,7 @@ from drive_agent.google_drive import (
 )
 from drive_agent.publication import (
     GitHubPublisher,
+    LocalEvidencePublisher,
     PublicationError,
     PublicationResult,
     PublicationWorker,
@@ -121,6 +122,7 @@ class AgentScanTests(unittest.TestCase):
             config = AgentConfig(
                 database_path=root / "agent.sqlite3",
                 work_directory=root / "work",
+                public_root=root / "public",
                 google_service_account_file=root / "unused-google.json",
                 drive_folder_id="private-inbox-id",
                 skyseal_server="https://seal.example.org",
@@ -194,6 +196,7 @@ class PublicationTests(unittest.TestCase):
                     "seal_payload": {
                         "seal_id": seal_id,
                         "created_at": "2026-08-29T00:00:00Z",
+                        "identity_id": "https://orcid.org/0000-0000-0000-0001",
                     }
                 },
                 separators=(",", ":"),
@@ -214,6 +217,7 @@ class PublicationTests(unittest.TestCase):
                 work_directory=root / "work",
                 github_prefix="evidence",
                 ots=FakeOTS(),
+                local=LocalEvidencePublisher(root / "public"),
                 github=github,
             )
             with patch("drive_agent.publication.verify_bundle"), patch(
@@ -225,6 +229,19 @@ class PublicationTests(unittest.TestCase):
                 result = worker.publish(job)
             prefix = f"evidence/2026/08/{seal_id}"
             self.assertEqual(result.prefix, prefix)
+            self.assertEqual(github.files, {})
+            local_directory = root / "public" / prefix
+            self.assertTrue((local_directory / "manifest.json").is_file())
+            with patch("drive_agent.publication.verify_bundle"), patch(
+                "drive_agent.publication.verify_identity_activation"
+            ):
+                worker.mirror(job, updating=False)
+            index = json.loads((root / "public" / "index.json").read_bytes())
+            self.assertEqual(index["publications"][0]["github_mirror"], "synced")
+            self.assertEqual(os.stat(local_directory).st_mode & 0o777, 0o755)
+            self.assertEqual(
+                os.stat(local_directory / "hashes.txt").st_mode & 0o777, 0o644
+            )
             self.assertEqual(
                 set(github.files),
                 {
@@ -251,8 +268,49 @@ class PublicationTests(unittest.TestCase):
             ):
                 upgraded = worker.upgrade(job)
             self.assertTrue(upgraded.bundle_ots.endswith(b"-UPGRADED"))
+            job["ots_proof"] = upgraded.bundle_ots
+            job["identity_ots_proof"] = upgraded.activation_ots
+            with patch("drive_agent.publication.verify_bundle"), patch(
+                "drive_agent.publication.verify_identity_activation"
+            ):
+                worker.mirror(job, updating=True)
             self.assertEqual(
                 github.files[f"{prefix}/seal.skyseal.json"], bundle
+            )
+
+    def test_local_publication_refuses_to_replace_immutable_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = LocalEvidencePublisher(root)
+            seal_id = "018f0000-0000-7000-8000-000000000001"
+            prefix = f"evidence/2026/08/{seal_id}"
+            artifacts = {
+                "hashes.txt": b"a" * 64 + b"\n",
+                "seal.skyseal.json": b"bundle\n",
+                "identity-genesis.json": b"genesis\n",
+                "identity-activation.json": b"activation\n",
+                "seal.skyseal.json.ots": b"ots-one",
+                "identity-activation.json.ots": b"ots-two",
+            }
+            summary = {
+                "seal_id": seal_id,
+                "created_at": "2026-08-29T00:00:00Z",
+                "entry_count": 1,
+                "identity_id": "https://orcid.org/0000-0000-0000-0001",
+                "relative_path": prefix,
+            }
+            manifest = b"manifest-one\n"
+            local.publish(prefix, artifacts, manifest, summary, updating=False)
+            changed = dict(artifacts)
+            changed["hashes.txt"] = b"b" * 64 + b"\n"
+            with self.assertRaisesRegex(PublicationError, "immutable"):
+                local.publish(prefix, changed, manifest, summary, updating=True)
+            upgraded = dict(artifacts)
+            upgraded["seal.skyseal.json.ots"] = b"ots-one-upgraded"
+            local.publish(prefix, upgraded, b"manifest-two\n", summary, updating=True)
+            self.assertEqual(
+                (root / prefix / "seal.skyseal.json.ots").read_bytes(),
+                b"ots-one-upgraded",
             )
 
     def test_timestamp_proofs_survive_partial_publication_for_retry(self) -> None:
@@ -260,6 +318,7 @@ class PublicationTests(unittest.TestCase):
             def __init__(self):
                 self.stamp_count = 0
                 self.publish_count = 0
+                self.mirror_count = 0
 
             def stamp(self, job):
                 self.stamp_count += 1
@@ -269,7 +328,15 @@ class PublicationTests(unittest.TestCase):
 
             def publish(self, job):
                 self.publish_count += 1
-                if self.publish_count == 1:
+                return PublicationResult(
+                    "evidence/2026/08/seal",
+                    bytes(job["ots_proof"]),
+                    bytes(job["identity_ots_proof"]),
+                )
+
+            def mirror(self, job, *, updating):
+                self.mirror_count += 1
+                if self.mirror_count == 1:
                     raise PublicationError("simulated partial GitHub failure")
                 return PublicationResult(
                     "evidence/2026/08/seal",
@@ -282,6 +349,7 @@ class PublicationTests(unittest.TestCase):
             config = AgentConfig(
                 database_path=root / "agent.sqlite3",
                 work_directory=root / "work",
+                public_root=root / "public",
                 google_service_account_file=root / "unused-google.json",
                 drive_folder_id="private-inbox-id",
                 skyseal_server="https://seal.example.org",
@@ -315,18 +383,24 @@ class PublicationTests(unittest.TestCase):
             )
             publisher = RetryPublisher()
             runtime = AgentRuntime(config, drive, FakeSkySeal(), publisher, store)
-            with self.assertRaises(PublicationError):
-                runtime.collect()
+            first_events = runtime.collect()
+            self.assertEqual(first_events[-2]["event"], "published_locally")
+            self.assertEqual(first_events[-1]["event"], "github_mirror_pending")
             preserved = store.get_job("018f0000-0000-7000-8000-000000000099")
             self.assertEqual(bytes(preserved["ots_proof"]), b"bundle-ots")
             self.assertEqual(bytes(preserved["identity_ots_proof"]), b"activation-ots")
             self.assertEqual(publisher.stamp_count, 1)
+            self.assertEqual(publisher.publish_count, 1)
+            self.assertEqual(preserved["status"], "published")
+            self.assertEqual(preserved["github_status"], "pending")
 
             events = runtime.collect()
-            self.assertEqual(events[-1]["event"], "published")
+            self.assertEqual(events[-1]["event"], "github_mirrored")
             self.assertEqual(publisher.stamp_count, 1)
+            self.assertEqual(publisher.publish_count, 1)
             published = store.get_job("018f0000-0000-7000-8000-000000000099")
             self.assertEqual(published["status"], "published")
+            self.assertEqual(published["github_status"], "synced")
 
     def test_github_contents_are_idempotent_and_evidence_is_immutable(self) -> None:
         class MemoryGitHub(GitHubPublisher):

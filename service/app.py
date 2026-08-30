@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import mimetypes
 import re
@@ -63,6 +64,17 @@ STATIC_FILES = {
     "/manifest.webmanifest": "manifest.webmanifest",
     "/sw.js": "sw.js",
 }
+PUBLIC_INDEX_SCHEMA = "urn:skyseal:public-evidence-index:v1"
+PUBLIC_PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9._-]+")
+PUBLIC_ARTIFACTS = (
+    "manifest.json",
+    "hashes.txt",
+    "seal.skyseal.json",
+    "seal.skyseal.json.ots",
+    "identity-genesis.json",
+    "identity-activation.json",
+    "identity-activation.json.ots",
+)
 
 
 @dataclass
@@ -120,6 +132,9 @@ class Application:
         self.store.initialize()
         self.orcid_exchange = orcid_exchange
         self.static_root = Path(__file__).resolve().parent / "pwa"
+        self.public_root = (
+            config.public_root or config.database_path.parent / "public"
+        ).resolve()
 
     def _response(
         self,
@@ -241,6 +256,177 @@ class Application:
         )
         return response
 
+    def _html(self, status: int, body: str) -> Response:
+        return self._response(
+            status,
+            body.encode("utf-8"),
+            [
+                ("Content-Type", "text/html; charset=utf-8"),
+                ("Cache-Control", "no-cache"),
+                ("Referrer-Policy", "no-referrer"),
+                (
+                    "Content-Security-Policy",
+                    "default-src 'none'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+                ),
+            ],
+        )
+
+    def _public_records(self) -> list[dict[str, object]]:
+        index_path = self.public_root / "index.json"
+        if not index_path.exists():
+            return []
+        try:
+            if index_path.stat().st_size > 4 * 1024 * 1024:
+                raise VerificationError("public evidence index is too large")
+            document = json.loads(index_path.read_bytes())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise VerificationError("public evidence index is unreadable") from exc
+        if (
+            not isinstance(document, dict)
+            or set(document) != {"schema", "publications"}
+            or document.get("schema") != PUBLIC_INDEX_SCHEMA
+            or not isinstance(document.get("publications"), list)
+        ):
+            raise VerificationError("public evidence index is invalid")
+        records: list[dict[str, object]] = []
+        required = {
+            "seal_id",
+            "created_at",
+            "entry_count",
+            "identity_id",
+            "relative_path",
+            "github_mirror",
+        }
+        for raw in document["publications"]:
+            if not isinstance(raw, dict) or set(raw) != required:
+                raise VerificationError("public evidence index record is invalid")
+            seal_id = raw["seal_id"]
+            created_at = raw["created_at"]
+            entry_count = raw["entry_count"]
+            identity_id = raw["identity_id"]
+            relative_path = raw["relative_path"]
+            mirror = raw["github_mirror"]
+            if not isinstance(seal_id, str) or SEAL_ID_RE.fullmatch(seal_id) is None:
+                raise VerificationError("public evidence index has an invalid seal ID")
+            if not isinstance(created_at, str) or not 1 <= len(created_at) <= 40:
+                raise VerificationError("public evidence index has an invalid timestamp")
+            if isinstance(entry_count, bool) or not isinstance(entry_count, int) or entry_count < 1:
+                raise VerificationError("public evidence index has an invalid entry count")
+            if not isinstance(identity_id, str):
+                raise VerificationError("public evidence index has an invalid identity")
+            validate_orcid(identity_id, "public evidence identity")
+            if not isinstance(relative_path, str):
+                raise VerificationError("public evidence index has an invalid path")
+            components = relative_path.split("/")
+            if (
+                len(components) < 2
+                or components[0] != "evidence"
+                or components[-1] != seal_id
+                or any(PUBLIC_PATH_COMPONENT_RE.fullmatch(item) is None for item in components)
+            ):
+                raise VerificationError("public evidence index has an unsafe path")
+            if mirror not in {"pending", "synced"}:
+                raise VerificationError("public evidence index has an invalid mirror state")
+            records.append(dict(raw))
+        return records
+
+    @staticmethod
+    def _page(title: str, content: str) -> str:
+        escaped_title = html.escape(title)
+        return f"""<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#12372a">
+  <title>{escaped_title}</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body><main>
+  <header><p class="eyebrow">Research provenance</p><h1>SkySeal</h1></header>
+  {content}
+</main></body>
+</html>"""
+
+    def _public_index(self) -> Response:
+        records = self._public_records()
+        if records:
+            items = []
+            for record in records:
+                seal_id = html.escape(str(record["seal_id"]))
+                created_at = html.escape(str(record["created_at"]))
+                entry_count = int(record["entry_count"])
+                mirror = "GitHub同期済み" if record["github_mirror"] == "synced" else "GitHub再試行中"
+                items.append(
+                    f'<li><a href="/proofs/{seal_id}"><code>{seal_id}</code></a>'
+                    f'<span>{created_at} · {entry_count}件 · {mirror}</span></li>'
+                )
+            listing = '<ul class="proof-list">' + "".join(items) + "</ul>"
+        else:
+            listing = "<p>VPSに保存された公開証拠はまだありません。</p>"
+        content = f"""
+<section class="card">
+  <h2>公開証拠</h2>
+  <p>この一覧はVPSに保存された証拠です。GitHubの状態にかかわらず閲覧できます。</p>
+  <p>一覧は案内用です。検証時は各パッケージの <code>manifest.json</code> と署名を確認してください。</p>
+  {listing}
+</section>
+<p><a class="button secondary" href="/">承認画面へ戻る</a></p>"""
+        return self._html(HTTPStatus.OK, self._page("SkySeal 公開証拠", content))
+
+    def _public_detail(self, seal_id: str) -> Response:
+        record = next(
+            (item for item in self._public_records() if item["seal_id"] == seal_id), None
+        )
+        if record is None:
+            return self._html(
+                HTTPStatus.NOT_FOUND,
+                self._page(
+                    "SkySeal 証拠が見つかりません",
+                    '<section class="card"><h2>証拠が見つかりません</h2>'
+                    '<p><a href="/proofs/">公開証拠一覧へ戻る</a></p></section>',
+                ),
+            )
+        relative_path = str(record["relative_path"])
+        base_url = "/" + quote(relative_path, safe="/")
+        links = "".join(
+            f'<li><a href="{base_url}/{quote(name, safe="")}">{html.escape(name)}</a></li>'
+            for name in PUBLIC_ARTIFACTS
+        )
+        identity_id = str(record["identity_id"])
+        mirror_label = (
+            "同期済み" if record["github_mirror"] == "synced" else "未同期・自動再試行中"
+        )
+        github_link = ""
+        if record["github_mirror"] == "synced":
+            github_url = "https://github.com/kagaya/SkySeal/tree/main/" + quote(
+                relative_path, safe="/"
+            )
+            github_link = (
+                f'<p><a class="button secondary" href="{html.escape(github_url)}">'
+                "GitHubミラーを開く</a></p>"
+            )
+        content = f"""
+<section class="card">
+  <h2>公開証拠</h2>
+  <dl>
+    <div><dt>Seal ID</dt><dd>{html.escape(seal_id)}</dd></div>
+    <div><dt>作成日時</dt><dd>{html.escape(str(record["created_at"]))}</dd></div>
+    <div><dt>ハッシュ件数</dt><dd>{int(record["entry_count"])}</dd></div>
+    <div><dt>本人性</dt><dd><a href="{html.escape(identity_id)}">{html.escape(identity_id)}</a></dd></div>
+    <div><dt>VPS保存</dt><dd>保存済み</dd></div>
+    <div><dt>GitHub</dt><dd>{mirror_label}</dd></div>
+  </dl>
+</section>
+<section class="card">
+  <h2>証拠ファイル</h2>
+  <p>原ファイル、ファイル名、Drive上のパスは含まれていません。</p>
+  <ul class="artifact-list">{links}</ul>
+  {github_link}
+</section>
+<p><a class="button secondary" href="/proofs/">公開証拠一覧へ戻る</a></p>"""
+        return self._html(HTTPStatus.OK, self._page(f"SkySeal {seal_id}", content))
+
     def handle(
         self,
         method: str,
@@ -255,6 +441,11 @@ class Application:
         try:
             if method == "GET" and path in STATIC_FILES:
                 return self._static(path)
+            if method == "GET" and path in {"/proofs", "/proofs/"}:
+                return self._public_index()
+            public_match = re.fullmatch(r"/proofs/([0-9a-f-]{36})", path)
+            if method == "GET" and public_match and SEAL_ID_RE.fullmatch(public_match.group(1)):
+                return self._public_detail(public_match.group(1))
             if method == "GET" and path == "/api/v1/orcid/start":
                 return self._orcid_start()
             if method == "GET" and path == "/api/v1/orcid/callback":

@@ -14,6 +14,8 @@ a time stamp system
 - [Phase 3 production deployment runbook (Japanese)](deploy/README.ja.md)
 - `deploy/bootstrap_agent_vps.sh`: one-command isolated Drive-agent setup on
   the always-on production VPS
+- Public evidence index: `https://proof.excyberlab.net/proofs/`; complete
+  packages are persisted on the VPS before GitHub mirroring
 
 Existing root-level evidence files remain legacy artifacts and are not rewritten
 by the v1 work.

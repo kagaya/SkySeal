@@ -37,4 +37,4 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/var/lib/skyseal-agent
+ReadWritePaths=/var/lib/skyseal-agent /var/lib/skyseal-public
