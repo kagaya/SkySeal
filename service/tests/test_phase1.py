@@ -372,10 +372,11 @@ class Phase1FlowTests(unittest.TestCase):
         headers = dict(response.headers)
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         self.assertEqual(headers["X-Frame-Options"], "DENY")
-        self.assertIn(b'<script src="/app.js" defer></script>', response.body)
+        self.assertIn(b'<script src="/app.js?v=4" defer></script>', response.body)
         self.assertNotIn(b"<script>", response.body)
-        app_script = self.app.handle("GET", "/app.js")
+        app_script = self.app.handle("GET", "/app.js?v=4")
         self.assertEqual(app_script.status, 200)
+        self.assertEqual(dict(app_script.headers)["Cache-Control"], "no-cache")
         self.assertIn(
             "if (!state.sealId)".encode(),
             app_script.body,
@@ -383,7 +384,8 @@ class Phase1FlowTests(unittest.TestCase):
         self.assertNotIn(b"!state.sealId || !state.bearer", app_script.body)
         service_worker = self.app.handle("GET", "/sw.js")
         self.assertEqual(service_worker.status, 200)
-        self.assertIn(b'skyseal-pwa-v3', service_worker.body)
+        self.assertIn(b'skyseal-pwa-v4', service_worker.body)
+        self.assertIn(b'fetch(event.request, {cache: "no-cache"})', service_worker.body)
 
     def test_drive_agent_creates_identity_inbox_transaction_without_public_source_metadata(self) -> None:
         self.enroll()

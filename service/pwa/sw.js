@@ -1,7 +1,7 @@
 "use strict";
 
-const CACHE = "skyseal-pwa-v3";
-const SHELL = ["/", "/app.js", "/styles.css", "/manifest.webmanifest"];
+const CACHE = "skyseal-pwa-v4";
+const SHELL = ["/", "/app.js?v=4", "/styles.css", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
@@ -19,7 +19,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api/")) return;
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, {cache: "no-cache"})
       .then((response) => {
         const copy = response.clone();
         caches.open(CACHE).then((cache) => cache.put(event.request, copy));

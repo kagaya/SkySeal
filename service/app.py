@@ -230,7 +230,10 @@ class Application:
         except OSError:
             return self._error(HTTPStatus.NOT_FOUND, "not_found", "static resource not found")
         content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        cache_control = "no-cache" if filename in {"index.html", "sw.js"} else "public, max-age=3600"
+        # The service worker supplies offline copies. Online requests must
+        # revalidate every shell asset so a security or workflow fix is not
+        # hidden behind an hour-long browser cache.
+        cache_control = "no-cache"
         response = self._response(
             HTTPStatus.OK,
             data,
