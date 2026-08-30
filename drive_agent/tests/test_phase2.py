@@ -24,6 +24,7 @@ from drive_agent.publication import (
     PublicationResult,
     PublicationWorker,
 )
+from drive_agent.private_ledger import GoogleSheetsPrivateLedger, build_receipt
 from drive_agent.skyseal import SealTransaction
 from drive_agent.state import AgentStore
 
@@ -76,13 +77,18 @@ class FakeDrive:
     def iter_content(self, item: DriveFile):
         yield self.contents[item.file_id]
 
+    def get_private_display_name(self, file_id: str) -> str:
+        return "Owner-only research folder"
+
 
 class FakeSkySeal:
     def __init__(self):
         self.hash_lists: list[bytes] = []
+        self.ledger_commitments: list[str | None] = []
 
-    def create(self, hash_list: bytes) -> SealTransaction:
+    def create(self, hash_list: bytes, ledger_commitment: str | None = None) -> SealTransaction:
         self.hash_lists.append(hash_list)
+        self.ledger_commitments.append(ledger_commitment)
         number = len(self.hash_lists)
         return SealTransaction(
             seal_id=f"018f0000-0000-7000-8000-{number:012d}",
@@ -163,6 +169,89 @@ class AgentScanTests(unittest.TestCase):
             self.assertEqual(len(second), 1)
             self.assertEqual(len(skyseal.hash_lists), 2)
             self.assertEqual(second[0]["entry_count"], 2)
+
+    def test_private_ledger_receipt_is_committed_without_leaking_into_events(self) -> None:
+        class FakeLedger:
+            pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = AgentConfig(
+                database_path=root / "agent.sqlite3",
+                work_directory=root / "work",
+                public_root=root / "public",
+                google_service_account_file=root / "unused-google.json",
+                drive_folder_id="private-inbox-id",
+                skyseal_server="https://seal.example.org",
+                skyseal_rp_id="seal.example.org",
+                skyseal_agent_token_file=root / "unused-agent-token",
+                github_owner="kagaya",
+                github_repository="SkySeal",
+                github_token_file=root / "unused-github-token",
+                private_ledger_spreadsheet_id="private-sheet-id",
+                settle_seconds=0,
+            )
+            store = AgentStore(config.database_path)
+            store.initialize()
+            skyseal = FakeSkySeal()
+            runtime = AgentRuntime(
+                config, FakeDrive(), skyseal, FakePublisher(), store, FakeLedger()
+            )
+            submitted = runtime.scan(now=100)
+            self.assertEqual(len(submitted), 1)
+            self.assertRegex(skyseal.ledger_commitments[0] or "", r"^sha256:[0-9a-f]{64}$")
+            self.assertNotIn("Owner-only", json.dumps(submitted))
+            job = store.get_job(submitted[0]["seal_id"])
+            self.assertEqual(job["ledger_status"], "pending")
+            receipt = json.loads(bytes(job["ledger_receipt"]))
+            self.assertEqual(receipt["drive_item"]["name"], "Owner-only research folder")
+            self.assertEqual(receipt["drive_item"]["id"], "private-unit-id")
+
+
+class PrivateLedgerTests(unittest.TestCase):
+    def test_sheet_append_is_idempotent_and_keeps_private_mapping_in_receipt(self) -> None:
+        class MemoryLedger(GoogleSheetsPrivateLedger):
+            def __init__(self):
+                super().__init__(object(), "private-sheet", public_origin="https://seal.example.org")
+                self.rows: list[list[str]] = []
+
+            def _request(self, url, *, method="GET", payload=None):
+                if method == "GET":
+                    return {"values": self.rows}
+                self.rows.extend(payload["values"])
+                return {"updates": {"updatedRows": 1}}
+
+        receipt = build_receipt(
+            drive_item_id="private-drive-id",
+            drive_item_name="Owner paper.pdf",
+            root_mime_type="application/pdf",
+            snapshot_digest="a" * 64,
+            subject_digest="b" * 64,
+            entry_count=1,
+        )
+        job = {
+            "seal_id": "018f0000-0000-7000-8000-000000000001",
+            "ledger_receipt": receipt.content,
+            "ledger_commitment": receipt.commitment,
+            "subject_digest": "b" * 64,
+            "publication_prefix": "evidence/2026/08/id",
+            "bundle_json": json.dumps(
+                {
+                    "seal_payload": {
+                        "seal_id": "018f0000-0000-7000-8000-000000000001",
+                        "created_at": "2026-08-30T00:00:00Z",
+                        "private_ledger_commitment": receipt.commitment,
+                    }
+                }
+            ).encode(),
+        }
+        ledger = MemoryLedger()
+        ledger.sync(job)
+        ledger.sync(job)
+        self.assertEqual(len(ledger.rows), 2)
+        self.assertEqual(ledger.rows[1][1], job["seal_id"])
+        self.assertEqual(ledger.rows[1][3], "Owner paper.pdf")
+        self.assertIn("private-drive-id", ledger.rows[1][13])
 
 
 class FakeOTS:

@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS seals (
     commitment_format TEXT NOT NULL,
     subject_digest TEXT NOT NULL,
     entry_count INTEGER NOT NULL,
+    private_ledger_commitment TEXT,
     source TEXT NOT NULL DEFAULT 'interactive' CHECK (source IN ('interactive', 'drive_agent')),
     status TEXT NOT NULL CHECK (
         status IN ('pending', 'awaiting_assertion', 'approved', 'expired', 'rejected', 'invalidated')
@@ -139,6 +140,10 @@ class Store:
                 if "source" not in seal_columns:
                     connection.execute(
                         "ALTER TABLE seals ADD COLUMN source TEXT NOT NULL DEFAULT 'interactive'"
+                    )
+                if "private_ledger_commitment" not in seal_columns:
+                    connection.execute(
+                        "ALTER TABLE seals ADD COLUMN private_ledger_commitment TEXT"
                     )
                 identity_columns = {
                     row["name"] for row in connection.execute("PRAGMA table_info(identities)")
@@ -511,6 +516,7 @@ class Store:
         subject_digest: str,
         entry_count: int,
         lifetime_seconds: int,
+        private_ledger_commitment: str | None = None,
         identity_id: str | None = None,
         source: str = "interactive",
     ) -> tuple[str, sqlite3.Row]:
@@ -521,8 +527,9 @@ class Store:
                 """
                 INSERT INTO seals
                 (seal_id, bearer_hash, commitment_format, subject_digest, entry_count,
-                 source, status, identity_id, created_at, expires_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+                 private_ledger_commitment, source, status, identity_id,
+                 created_at, expires_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
                 """,
                 (
                     seal_id,
@@ -530,6 +537,7 @@ class Store:
                     commitment_format,
                     subject_digest,
                     entry_count,
+                    private_ledger_commitment,
                     source,
                     identity_id,
                     now,

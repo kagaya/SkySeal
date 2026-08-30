@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS jobs (
     ots_proof BLOB,
     identity_ots_proof BLOB,
     publication_prefix TEXT,
+    ledger_receipt BLOB,
+    ledger_commitment TEXT,
+    ledger_status TEXT NOT NULL DEFAULT 'disabled' CHECK (
+        ledger_status IN ('disabled', 'pending', 'synced')
+    ),
+    ledger_error TEXT,
     github_status TEXT NOT NULL DEFAULT 'pending',
     github_error TEXT,
     error_code TEXT,
@@ -94,6 +100,16 @@ class AgentStore:
                     )
                 if "github_error" not in job_columns:
                     connection.execute("ALTER TABLE jobs ADD COLUMN github_error TEXT")
+                if "ledger_receipt" not in job_columns:
+                    connection.execute("ALTER TABLE jobs ADD COLUMN ledger_receipt BLOB")
+                if "ledger_commitment" not in job_columns:
+                    connection.execute("ALTER TABLE jobs ADD COLUMN ledger_commitment TEXT")
+                if "ledger_status" not in job_columns:
+                    connection.execute(
+                        "ALTER TABLE jobs ADD COLUMN ledger_status TEXT NOT NULL DEFAULT 'disabled'"
+                    )
+                if "ledger_error" not in job_columns:
+                    connection.execute("ALTER TABLE jobs ADD COLUMN ledger_error TEXT")
         finally:
             os.umask(previous_umask)
         for candidate in (
@@ -177,6 +193,8 @@ class AgentStore:
         seal_id: str,
         bearer_token: str,
         approval_url: str,
+        ledger_receipt: bytes | None = None,
+        ledger_commitment: str | None = None,
         now: int | None = None,
     ) -> sqlite3.Row:
         created_at = int(time.time()) if now is None else now
@@ -192,8 +210,9 @@ class AgentStore:
                 """
                 INSERT INTO jobs
                 (unit_ref, snapshot_digest, status, hash_list, subject_digest,
-                 entry_count, seal_id, bearer_token, approval_url, created_at, updated_at)
-                VALUES (?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?)
+                 entry_count, seal_id, bearer_token, approval_url,
+                 ledger_receipt, ledger_commitment, ledger_status, created_at, updated_at)
+                VALUES (?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     unit_ref,
@@ -204,6 +223,9 @@ class AgentStore:
                     seal_id,
                     bearer_token,
                     approval_url,
+                    ledger_receipt,
+                    ledger_commitment,
+                    "pending" if ledger_receipt is not None else "disabled",
                     created_at,
                     created_at,
                 ),
@@ -235,6 +257,18 @@ class AgentStore:
                     """
                     SELECT * FROM jobs
                     WHERE status = 'published' AND github_status != 'synced'
+                    ORDER BY created_at, job_id
+                    """
+                ).fetchall()
+            )
+
+    def jobs_needing_ledger_sync(self) -> list[sqlite3.Row]:
+        with self.connect() as connection:
+            return list(
+                connection.execute(
+                    """
+                    SELECT * FROM jobs
+                    WHERE status = 'published' AND ledger_status = 'pending'
                     ORDER BY created_at, job_id
                     """
                 ).fetchall()
@@ -347,6 +381,32 @@ class AgentStore:
             )
             if cursor.rowcount != 1:
                 raise ValueError("published job not found for GitHub retry state")
+
+    def mark_ledger_synced(self, seal_id: str) -> None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET ledger_status = 'synced', ledger_error = NULL, updated_at = ?
+                WHERE seal_id = ? AND status = 'published'
+                """,
+                (int(time.time()), seal_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("published job not found for private-ledger state")
+
+    def mark_ledger_pending(self, seal_id: str, error: str) -> None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET ledger_status = 'pending', ledger_error = ?, updated_at = ?
+                WHERE seal_id = ? AND status = 'published'
+                """,
+                (error[:120], int(time.time()), seal_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("published job not found for private-ledger retry state")
 
     def mark_error(self, seal_id: str, error_code: str) -> None:
         with self.connect() as connection:

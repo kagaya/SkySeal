@@ -13,6 +13,7 @@ from verifier.skyseal_verify import canonical_json
 
 
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
 WORKSPACE_EXPORTS = {
@@ -91,7 +92,7 @@ class DriveReader(Protocol):
 class GoogleServiceAccountTokenProvider:
     """Short-lived token provider backed by Google's maintained auth library."""
 
-    def __init__(self, service_account_file: Path):
+    def __init__(self, service_account_file: Path, scopes: tuple[str, ...] = (DRIVE_SCOPE,)):
         try:
             from google.auth.transport.requests import Request
             from google.oauth2 import service_account
@@ -102,7 +103,7 @@ class GoogleServiceAccountTokenProvider:
         self._request_type = Request
         try:
             self._credentials = service_account.Credentials.from_service_account_file(
-                str(service_account_file), scopes=[DRIVE_SCOPE]
+                str(service_account_file), scopes=list(scopes)
             )
         except Exception as exc:
             raise DriveAPIError("cannot load Google service-account credentials") from exc
@@ -203,6 +204,25 @@ class GoogleDriveRESTClient:
                 break
             page_token = next_token
         return sorted(files, key=lambda item: item.file_id)
+
+    def get_private_display_name(self, file_id: str) -> str:
+        """Fetch a root display name only for the owner-only ledger."""
+        query = urllib.parse.urlencode(
+            {"fields": "id,name", "supportsAllDrives": "true"}
+        )
+        url = (
+            "https://www.googleapis.com/drive/v3/files/"
+            + urllib.parse.quote(file_id, safe="")
+            + "?"
+            + query
+        )
+        value = self._json(url)
+        if value.get("id") != file_id or not isinstance(value.get("name"), str):
+            raise DriveAPIError("Google Drive omitted the private display name")
+        name = str(value["name"])
+        if not name or len(name.encode("utf-8")) > 1024:
+            raise DriveAPIError("Google Drive returned an invalid private display name")
+        return name
 
     def iter_content(self, item: DriveFile) -> Iterator[bytes]:
         if item.is_folder or item.mime_type == SHORTCUT_MIME:

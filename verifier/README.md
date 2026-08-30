@@ -63,6 +63,25 @@ Before Bitcoin confirmation, add `--allow-pending-ots` to verify every other
 layer while reporting each proof as `pending_or_unverified`. This option does
 not claim independent time evidence.
 
+## Owner-disclosed private receipt
+
+If the owner supplies the `receipt_json` value from the private ledger and the
+claimed source bytes, first run the complete public verification above. Then
+verify the private/public correspondence:
+
+```bash
+python3 verifier/skyseal_private_ledger_verify.py \
+  receipt.json \
+  ./evidence-directory/seal.skyseal.json \
+  ./owner-disclosed-file-or-directory
+```
+
+For a directory, every regular file is hashed recursively and the sorted,
+deduplicated set must match. Symlinks are rejected. Google Workspace items must
+be supplied as the exact PDF/XLSX export bytes described in the Phase 2
+protocol. This command deliberately reveals the selected Drive name and ID in
+its report; run it only within the agreed audit boundary.
+
 Run the standard-library test suite:
 
 ```bash

@@ -15,11 +15,12 @@ VPSディスクへ保存しない。
 | ホスト | 保持・処理するもの | 保持しないもの |
 |---|---|---|
 | 公開 Linux VPS (`skyseal`) | ORCID iD、Passkey 公開鍵、本人登録証明、ハッシュ、署名証明、SQLite | Drive API鍵、Driveのファイル名、Passkey秘密鍵 |
-| 同一VPSのエージェント (`skyseal-agent`) | Driveからストリーム取得した一時バイト列、非公開処理状態、専用API秘密情報 | Passkey秘密鍵、恒久的な原ファイル複製、ファイル名 |
+| 同一VPSのエージェント (`skyseal-agent`) | Driveからストリーム取得した一時バイト列、非公開処理状態、専用API秘密情報、任意の非公開台帳root名 | Passkey秘密鍵、恒久的な原ファイル複製 |
 | iPhone / iPad | Passkey と利用者の承認操作 | Drive/GitHub の長期 API トークン |
 
 Drive エージェントから公開サービスへ送るのは、厳格形式のハッシュ一覧と件数だけである。
-ファイル名、Drive ID、フォルダ構造は送らない。
+ファイル名、Drive ID、フォルダ構造は公開サービスへ送らない。任意の非公開台帳を有効にした場合も、
+公開サービスへ送るのはsalt付きreceiptのSHA-256だけである。
 
 同一VPS方式では、ホストまたはroot権限が侵害されると専用Inboxを読み取られる可能性がある。
 Googleサービスアカウントは `SkySeal Inbox` だけのViewerとし、Domain-wide delegationを
@@ -37,7 +38,7 @@ originまたはRP IDを変更すると既存Passkeyが使えなくなるため�
 1. 親ドメイン `excyberlab.net` と、`proof.excyberlab.net` を向けられる Linux VPS。
 2. ORCID Public API の client ID / secret。登録 callback は
    `https://proof.excyberlab.net/api/v1/orcid/callback` と完全一致させる。
-3. Google Cloud の service account JSON。Drive API v3 を有効にし、監視専用フォルダだけを
+3. Google Cloud の service account JSON。Drive API v3（非公開台帳を使う場合はSheets APIも）を有効にし、監視専用フォルダだけを
    service account のメールアドレスへ閲覧者として共有する。Domain-wide delegation は使わない。
 4. `kagaya/SkySeal` のみに限定し `Contents: write` だけを与えた fine-grained GitHub token。
 5. iCloudキーチェーンのPasskeyを利用できるiPhoneまたはiPad。本人登録の有効化と、各sealの

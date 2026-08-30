@@ -67,6 +67,8 @@ class AgentConfig:
     github_owner: str
     github_repository: str
     github_token_file: Path
+    private_ledger_spreadsheet_id: str | None = None
+    private_ledger_sheet: str = "Ledger"
     github_branch: str = "main"
     github_prefix: str = "evidence"
     settle_seconds: int = 120
@@ -94,6 +96,13 @@ class AgentConfig:
                 raise ConfigurationError(f"invalid {label}")
         if DRIVE_ID_RE.fullmatch(self.drive_folder_id) is None:
             raise ConfigurationError("invalid Drive folder ID")
+        if (
+            self.private_ledger_spreadsheet_id is not None
+            and DRIVE_ID_RE.fullmatch(self.private_ledger_spreadsheet_id) is None
+        ):
+            raise ConfigurationError("invalid private-ledger spreadsheet ID")
+        if re.fullmatch(r"[A-Za-z0-9 _-]{1,50}", self.private_ledger_sheet) is None:
+            raise ConfigurationError("invalid private-ledger sheet name")
         if self.github_prefix.startswith("/") or ".." in self.github_prefix.split("/"):
             raise ConfigurationError("invalid GitHub evidence prefix")
         if self.settle_seconds < 0 or self.poll_seconds < 1:
@@ -134,6 +143,10 @@ class AgentConfig:
             github_token_file=private_file(
                 Path(required("SKYSEAL_GITHUB_TOKEN_FILE")), "GitHub token"
             ),
+            private_ledger_spreadsheet_id=(
+                os.getenv("SKYSEAL_PRIVATE_LEDGER_SPREADSHEET_ID", "").strip() or None
+            ),
+            private_ledger_sheet=os.getenv("SKYSEAL_PRIVATE_LEDGER_SHEET", "Ledger").strip(),
             github_branch=os.getenv("SKYSEAL_GITHUB_BRANCH", "main"),
             github_prefix=os.getenv("SKYSEAL_GITHUB_PREFIX", "evidence").strip("/"),
             settle_seconds=int(os.getenv("SKYSEAL_DRIVE_SETTLE_SECONDS", "120")),

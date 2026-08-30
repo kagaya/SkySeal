@@ -108,11 +108,16 @@ def uuid7() -> str:
     return str(uuid.UUID(int=value))
 
 
-def exact_object(value: Any, required: set[str], context: str) -> dict[str, Any]:
+def exact_object(
+    value: Any,
+    required: set[str],
+    context: str,
+    optional: set[str] | None = None,
+) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise VerificationError(f"{context}: expected a JSON object")
     missing = sorted(required - value.keys())
-    unknown = sorted(value.keys() - required)
+    unknown = sorted(value.keys() - required - (optional or set()))
     if missing:
         raise VerificationError(f"{context}: missing members: {', '.join(missing)}")
     if unknown:
@@ -919,6 +924,7 @@ class Application:
             self._parse_json(body, "seal creation"),
             {"commitment_format", "subject_digest", "entry_count"},
             "seal creation",
+            {"private_ledger_commitment"},
         )
         if request["commitment_format"] != HASH_LIST_FORMAT:
             raise VerificationError("unsupported commitment format")
@@ -932,12 +938,22 @@ class Application:
         agent = self._agent(headers)
         if authorization and agent is None:
             raise PermissionError("unsupported seal-creation authorization")
+        private_ledger_commitment = request.get("private_ledger_commitment")
+        if private_ledger_commitment is not None:
+            if agent is None:
+                raise PermissionError("private ledger commitments require a Drive agent")
+            if (
+                not isinstance(private_ledger_commitment, str)
+                or DIGEST_RE.fullmatch(private_ledger_commitment) is None
+            ):
+                raise VerificationError("private_ledger_commitment must be a SHA-256 digest")
         seal_id = uuid7()
         bearer, row = self.store.create_seal(
             seal_id=seal_id,
             commitment_format=HASH_LIST_FORMAT,
             subject_digest=subject_digest,
             entry_count=entry_count,
+            private_ledger_commitment=private_ledger_commitment,
             lifetime_seconds=self.config.transaction_lifetime_seconds,
             identity_id=agent["orcid"] if agent is not None else None,
             source="drive_agent" if agent is not None else "interactive",
@@ -1047,6 +1063,8 @@ class Application:
             "nonce": encode_base64url(secrets.token_bytes(32)),
             "created_at": created_at,
         }
+        if seal["private_ledger_commitment"] is not None:
+            payload["private_ledger_commitment"] = seal["private_ledger_commitment"]
         payload_json = canonical_json(payload)
         challenge = compute_challenge(payload)
         self.store.set_seal_options(

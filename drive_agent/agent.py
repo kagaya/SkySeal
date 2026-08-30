@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
@@ -17,11 +18,19 @@ if str(REPOSITORY) not in sys.path:
 
 from drive_agent.config import AgentConfig, ConfigurationError, read_secret  # noqa: E402
 from drive_agent.google_drive import (  # noqa: E402
+    DRIVE_SCOPE,
+    SHEETS_SCOPE,
     DriveAPIError,
     GoogleDriveRESTClient,
     GoogleServiceAccountTokenProvider,
     hash_unit,
     inventory_unit,
+    validate_hash_list_bytes,
+)
+from drive_agent.private_ledger import (  # noqa: E402
+    GoogleSheetsPrivateLedger,
+    PrivateLedgerError,
+    build_receipt,
 )
 from drive_agent.publication import (  # noqa: E402
     GitHubPublisher,
@@ -41,6 +50,7 @@ class AgentRuntime:
     skyseal: Any
     publisher: Any
     store: AgentStore
+    ledger: Any | None = None
 
     def scan(self, now: int | None = None) -> list[dict[str, object]]:
         observed_at = int(time.time()) if now is None else now
@@ -60,7 +70,21 @@ class AgentRuntime:
             if after_hash.snapshot_digest != unit.snapshot_digest:
                 self.store.observe(after_hash, observed_at)
                 continue
-            transaction = self.skyseal.create(hash_list)
+            receipt = None
+            if self.ledger is not None:
+                receipt = build_receipt(
+                    drive_item_id=unit.root.file_id,
+                    drive_item_name=self.drive.get_private_display_name(unit.root.file_id),
+                    root_mime_type=unit.root.mime_type,
+                    snapshot_digest=unit.snapshot_digest,
+                    subject_digest=hashlib.sha256(hash_list).hexdigest(),
+                    entry_count=len(validate_hash_list_bytes(hash_list)),
+                )
+            transaction = (
+                self.skyseal.create(hash_list, receipt.commitment)
+                if receipt is not None
+                else self.skyseal.create(hash_list)
+            )
             job = self.store.add_job(
                 unit_ref=row["unit_ref"],
                 snapshot_digest=unit.snapshot_digest,
@@ -68,6 +92,8 @@ class AgentRuntime:
                 seal_id=transaction.seal_id,
                 bearer_token=transaction.bearer_token,
                 approval_url=transaction.approval_url,
+                ledger_receipt=receipt.content if receipt is not None else None,
+                ledger_commitment=receipt.commitment if receipt is not None else None,
                 now=observed_at,
             )
             submitted.append(
@@ -116,8 +142,22 @@ class AgentRuntime:
                 result.prefix,
             )
             events.append({"seal_id": job["seal_id"], "event": "published_locally"})
+        self._sync_pending_ledger(events)
         self._mirror_pending(events)
         return events
+
+    def _sync_pending_ledger(self, events: list[dict[str, str]]) -> None:
+        if self.ledger is None:
+            return
+        for job in self.store.jobs_needing_ledger_sync():
+            try:
+                self.ledger.sync(job)
+            except PrivateLedgerError as exc:
+                self.store.mark_ledger_pending(job["seal_id"], str(exc))
+                events.append({"seal_id": job["seal_id"], "event": "private_ledger_pending"})
+                continue
+            self.store.mark_ledger_synced(job["seal_id"])
+            events.append({"seal_id": job["seal_id"], "event": "private_ledger_synced"})
 
     def _mirror_pending(self, events: list[dict[str, str]]) -> None:
         for job in self.store.jobs_needing_github_mirror():
@@ -140,6 +180,7 @@ class AgentRuntime:
                 job["seal_id"], result.bundle_ots, result.activation_ots
             )
             events.append({"seal_id": job["seal_id"], "event": "timestamps_upgraded"})
+        self._sync_pending_ledger(events)
         self._mirror_pending(events)
         return events
 
@@ -154,9 +195,13 @@ class AgentRuntime:
 def build_runtime(config: AgentConfig) -> AgentRuntime:
     store = AgentStore(config.database_path)
     store.initialize()
-    drive = GoogleDriveRESTClient(
-        GoogleServiceAccountTokenProvider(config.google_service_account_file)
+    scopes = (DRIVE_SCOPE,)
+    if config.private_ledger_spreadsheet_id is not None:
+        scopes = (DRIVE_SCOPE, SHEETS_SCOPE)
+    token_provider = GoogleServiceAccountTokenProvider(
+        config.google_service_account_file, scopes=scopes
     )
+    drive = GoogleDriveRESTClient(token_provider)
     skyseal = SkySealClient(
         config.skyseal_server,
         read_secret(config.skyseal_agent_token_file, "SkySeal agent token"),
@@ -176,7 +221,15 @@ def build_runtime(config: AgentConfig) -> AgentRuntime:
         local=LocalEvidencePublisher(config.public_root),
         github=github,
     )
-    return AgentRuntime(config, drive, skyseal, publisher, store)
+    ledger = None
+    if config.private_ledger_spreadsheet_id is not None:
+        ledger = GoogleSheetsPrivateLedger(
+            token_provider,
+            config.private_ledger_spreadsheet_id,
+            config.private_ledger_sheet,
+            config.skyseal_server,
+        )
+    return AgentRuntime(config, drive, skyseal, publisher, store, ledger)
 
 
 def print_events(events: list[dict[str, object]]) -> None:
@@ -188,7 +241,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=("scan", "collect", "run-once", "run", "upgrade", "localize", "pending"),
+        choices=(
+            "scan",
+            "collect",
+            "run-once",
+            "run",
+            "upgrade",
+            "localize",
+            "pending",
+            "ledger-check",
+        ),
     )
     return parser
 
@@ -220,6 +282,11 @@ def main(argv: list[str] | None = None) -> int:
                         }
                     ]
                 )
+        elif args.command == "ledger-check":
+            if runtime.ledger is None:
+                raise ConfigurationError("private ledger is not configured")
+            runtime.ledger.check()
+            print_events([{"event": "private_ledger_ready"}])
         else:
             while True:
                 print_events(runtime.scan())
@@ -233,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
         DriveAPIError,
         SkySealAPIError,
         PublicationError,
+        PrivateLedgerError,
         ValueError,
     ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

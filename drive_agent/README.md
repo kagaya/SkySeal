@@ -7,8 +7,10 @@ mirrors that package to GitHub. The
 original remains in Google Drive; bytes are streamed through the agent for
 hashing and are not persisted as source-file copies.
 
-It never requests the Drive `name` field. Its logs use a domain-separated hash
-of the private Drive unit ID. Read `spec/phase2-protocol.md` before deployment.
+Its normal hashing inventory never requests the Drive `name` field. If the
+optional private ledger is enabled, it requests only the root sealing unit's
+name for an owner-held receipt. Names and IDs never enter public logs or
+evidence. Read `spec/phase2-protocol.md` before deployment.
 
 ## Placement and trust
 
@@ -29,7 +31,8 @@ manual or delayed processing but does not run while Windows/WSL is stopped.
 
 1. Deploy Phase 1, authenticate the ORCID iD, register the first passkey, and
    activate the identity with a User-Verified passkey assertion.
-2. Create a Google Cloud service account and enable Drive API v3.
+2. Create a Google Cloud service account and enable Drive API v3. Also enable
+   Google Sheets API when using the optional private ledger.
 3. Share only the private inbox folder with the service-account email as a
    viewer. Do not enable domain-wide delegation.
 4. Create a fine-grained GitHub token restricted to the evidence repository
@@ -78,7 +81,33 @@ python3 drive_agent/agent.py scan
 python3 drive_agent/agent.py pending
 python3 drive_agent/agent.py collect
 python3 drive_agent/agent.py upgrade
+python3 drive_agent/agent.py ledger-check
 ```
+
+## Owner-only Google Sheet ledger
+
+Create a Google Sheet in the owner's Drive, rename its tab to `Ledger`, keep
+link sharing off, and share that Sheet as **Editor** only with the existing
+SkySeal service-account email. The service account remains **Viewer** on
+`SkySeal Inbox`. Set these private environment values:
+
+```text
+SKYSEAL_PRIVATE_LEDGER_SPREADSHEET_ID=<ID between /d/ and /edit>
+SKYSEAL_PRIVATE_LEDGER_SHEET=Ledger
+```
+
+On the production VPS the configuration and header check are one command:
+
+```bash
+sudo bash /opt/skyseal/deploy/configure_private_ledger_vps.sh \
+  --spreadsheet-id '<spreadsheet-id>'
+```
+
+Future rows contain the root Drive item name/link/ID, Seal ID, public proof URL,
+and exact salted receipt JSON. Only a SHA-256 commitment to that receipt is
+public and Passkey-signed. The Sheet is not end-to-end encrypted: its owner,
+the explicitly shared service account, and VPS/root administrators controlling
+that credential can technically read it.
 
 After upload and the settle interval, open the installed SkySeal PWA on an
 iPhone or iPad. The pending card shows only arrival time and hash count. Tap the

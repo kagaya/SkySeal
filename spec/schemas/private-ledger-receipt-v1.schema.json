@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:skyseal:schema:private-ledger-receipt:v1",
+  "title": "SkySeal owner-only private ledger receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "commitment_format",
+    "drive_item",
+    "subject_digest",
+    "entry_count",
+    "salt"
+  ],
+  "properties": {
+    "schema": {"const": "urn:skyseal:private-ledger-receipt:v1"},
+    "commitment_format": {"const": "skyseal-sha256-set-v1"},
+    "drive_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "url", "mime_type", "snapshot_digest"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "url": {"type": "string", "pattern": "^https://drive\\.google\\.com/open\\?id=[A-Za-z0-9_-]+$"},
+        "mime_type": {"type": "string", "minLength": 1},
+        "snapshot_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "subject_digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": {"const": "sha256"},
+        "value": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "entry_count": {"type": "integer", "minimum": 1, "maximum": 10000000},
+    "salt": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}
+  }
+}

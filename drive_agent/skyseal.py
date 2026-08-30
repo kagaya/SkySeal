@@ -77,21 +77,26 @@ class SkySealClient:
             raise SkySealAPIError(f"{context} is not a JSON object")
         return value
 
-    def create(self, hash_list: bytes) -> SealTransaction:
+    def create(
+        self, hash_list: bytes, private_ledger_commitment: str | None = None
+    ) -> SealTransaction:
         try:
             records = validate_hash_list_bytes(hash_list)
         except DriveAPIError as exc:
             raise SkySealAPIError(str(exc)) from exc
+        payload = {
+            "commitment_format": HASH_LIST_FORMAT,
+            "subject_digest": hashlib.sha256(hash_list).hexdigest(),
+            "entry_count": len(records),
+        }
+        if private_ledger_commitment is not None:
+            payload["private_ledger_commitment"] = private_ledger_commitment
         response = self._object(
             self._request(
                 "/api/v1/seals",
                 method="POST",
                 authorization=f"SkySeal-Agent {self.agent_token}",
-                payload={
-                    "commitment_format": HASH_LIST_FORMAT,
-                    "subject_digest": hashlib.sha256(hash_list).hexdigest(),
-                    "entry_count": len(records),
-                },
+                payload=payload,
             ),
             "seal creation response",
         )

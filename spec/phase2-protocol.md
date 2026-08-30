@@ -13,16 +13,39 @@ gesture and user verification remain mandatory.
 
 The Drive agent is a separate private process. It may read the monitored Drive
 folder, raw bytes, private Drive IDs, and private SkySeal transaction bearers.
-The public SkySeal service receives only the strict hash-list digest, distinct
-hash count, and protocol state. GitHub and OpenTimestamps receive only public
-artifacts.
+With the optional owner ledger enabled, it also reads only the root sealing
+unit's display name and writes a salted private receipt to one explicitly
+shared Google Sheet. The public SkySeal service receives the strict hash-list
+digest, distinct hash count, protocol state, and only the receipt commitment.
+GitHub and OpenTimestamps receive only public artifacts.
 
 The recommended Google identity is a dedicated service account. Only the inbox
 folder is shared read-only with that address. Domain-wide delegation is not
 required and should not be enabled.
 
-The agent's Drive API field mask intentionally omits `name`. Names are neither
-needed for hashing nor stored in the private agent database.
+The hashing inventory's Drive API field mask intentionally omits `name`.
+Names are not needed for hashing. If the owner ledger is enabled, a separate
+metadata request obtains the direct-child root name solely for the private
+receipt; descendants' names and the file-to-hash mapping remain absent.
+
+### 1.1 Optional owner-only ledger
+
+The owner creates a Google Sheet, keeps it non-public, and shares only that
+Sheet as Editor with the dedicated service account. The inbox remains Viewer.
+The service account requests Drive-readonly and Sheets scopes, while Google
+resource sharing limits access to the explicitly shared resources.
+
+Before seal creation the agent constructs
+`urn:skyseal:private-ledger-receipt:v1` containing the root Drive ID, current
+display name and link, root MIME type, private snapshot digest, public subject
+digest, distinct entry count, and a random 256-bit salt. SHA-256 over its JCS
+bytes becomes `seal_payload.private_ledger_commitment`; therefore the user's
+Passkey signs the private/public correspondence without publishing it.
+
+After local publication the Sheet row is appended idempotently. It includes
+the Seal ID, public proof URL, and exact receipt JSON. A Sheets failure leaves
+`ledger_status=pending` in the private agent database and is retried; it does
+not remove VPS evidence or block the independent GitHub mirror.
 
 ## 2. Sealing units and upload stability
 
@@ -136,6 +159,12 @@ The public hash set permits known-candidate membership tests. Publication also
 reveals ORCID, distinct-hash count, and approximate processing time.
 OpenTimestamps calendar submissions can reveal timing and network metadata and
 can make closely timed submissions correlatable. These are explicit v1 limits.
+
+The optional Sheet is “owner-only” at the application-sharing level, not an
+end-to-end encrypted vault: the owner, the explicitly shared service account,
+and administrators able to control that account or VPS root can technically
+read it. A third-party auditor receives a selected receipt only when the owner
+chooses to disclose it.
 
 ## 8. Failure and recovery
 

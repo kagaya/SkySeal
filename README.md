@@ -10,6 +10,7 @@ a time stamp system
 - [Phase 1 PC client](cli/skyseal_pc.py)
 - [Phase 2 Drive and publication protocol](spec/phase2-protocol.md)
 - [Private Google Drive agent](drive_agent/README.md)
+- [Owner-disclosed private ledger verifier](verifier/skyseal_private_ledger_verify.py)
 - [Complete publication verifier](verifier/skyseal_publication_verify.py)
 - [Phase 3 production deployment runbook (Japanese)](deploy/README.ja.md)
 - [Production architecture, operations, and cross-platform maintenance manual

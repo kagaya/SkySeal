@@ -81,7 +81,7 @@ ORCIDで特定した本人がPasskeyで承認した証拠を作る。証拠に�
 - ORCIDに結び付いたPasskeyのUser PresentとUser Verifiedを伴う署名で承認された。
 - `.ots`を検証できる時点では、その対象証拠がブロックチェーン時刻より前に存在した。
 
-次の内容は主張しない。
+非公開台帳を有効にしていない証拠は、次の内容を主張しない。
 
 - 公開ハッシュとファイル名、Drive ID、フォルダ構造の対応。
 - ORCID以外の実世界の属性や研究内容の正しさ。
@@ -100,6 +100,7 @@ flowchart TD
     I["iPhone / iPad\nORCID + Passkey"] -->|explicit approval| S
     S -->|approved artifacts| A
     A -->|verify + OTS + atomic publish| V["VPS public evidence"]
+    A -->|private receipt| L["Owner-only Google Sheet"]
     V -->|best-effort mirror| G["GitHub evidence/"]
     C["Caddy HTTPS"] --> S
     C --> V
@@ -110,7 +111,7 @@ flowchart TD
 | 境界 | 読めるもの | 読めない・保持しないもの |
 |---|---|---|
 | Google Drive | 原ファイル、名前、構造 | SkySealのPasskey秘密鍵 |
-| `skyseal-agent` | 専用Inbox、Drive ID、原バイトのストリーム、非公開ジョブ情報 | Passkey秘密鍵 |
+| `skyseal-agent` | 専用Inbox、Drive ID、原バイトのストリーム、非公開ジョブ情報、台帳有効時のroot名 | Passkey秘密鍵 |
 | `skyseal` | ORCID、Passkey公開鍵、承認トランザクション、公開証拠 | Googleサービスアカウント鍵、Drive名・ID |
 | iPhone/iPad | Passkey、承認操作 | Drive/GitHubの長期トークン |
 | VPS公開領域/GitHub | ハッシュ、署名、本人登録証明、OTS証明 | 原ファイル、名前、パス、Drive ID、対応表 |
@@ -138,6 +139,7 @@ flowchart TD
 
 1. 1分timerがDriveエージェントを起動する。
 2. 専用Inbox直下を読み、名前を要求しないDrive API field maskで非公開スナップショットを作る。
+   非公開台帳が有効な場合だけ、処理単位のroot名を別のmetadata要求で取得する。
 3. スナップショットが120秒変化しなければハッシュを計算する。
 4. 計算後にDriveを再観測し、途中変更があれば破棄して安定待ちへ戻す。
 5. `skyseal-sha256-set-v1`形式のハッシュ一覧はagent内に保持し、その一覧自体のダイジェストと
@@ -174,6 +176,10 @@ PDF、PDFへexportした**そのバイト列**をハッシュする。Driveの�
 5. GitHubへ順次ミラーし、完全性を示す`manifest.json`を最後に送る。
 6. 毎日のOTS upgradeでBitcoin確認を取り込み、`.ots`とmanifestだけを更新する。
 
+非公開台帳を有効にした新規sealでは、承認前にDriveのroot項目とハッシュ集合を結ぶsalt付きreceiptを
+作り、そのSHA-256だけをPasskey署名対象へ加える。承認・VPS公開後、receipt本体を所有者の
+Google Sheetへ同期する。Sheet障害時は非公開DBで`pending`にして再試行し、公開証拠は失わない。
+
 GitHubが失敗してもVPS公開は取り消さない。ジョブの`github_status`を`pending`にして次回の
 エージェント実行時に再試行する。したがってGitHub障害中も`/proofs/`から証拠を取得できる。
 
@@ -182,6 +188,7 @@ GitHubが失敗してもVPS公開は取り消さない。ジョブの`github_sta
 | 場所 | 主な内容 | 権限・公開性 |
 |---|---|---|
 | Google Drive `SkySeal Inbox` | 原ファイル、名前、フォルダ | Google Driveの共有設定 |
+| Google Sheet `SkySeal Private Ledger` | root名・Driveリンク/ID・Seal ID・公開URL・監査receipt | 所有者と明示共有したservice accountのみ |
 | `/var/lib/skyseal/skyseal.sqlite3` | ORCID、セッション、Passkeyルーティング情報、公開鍵、承認トランザクション、agent tokenのハッシュ | `skyseal:skyseal`, 600 |
 | `/var/lib/skyseal-agent/drive-agent.sqlite3` | Drive ID、snapshot、hash list、private bearer、成果物、GitHub同期状態 | `skyseal-agent:skyseal-agent`, 600 |
 | `/var/lib/skyseal-agent/work` | OTS・検証用の短命な作業ファイル | 非公開、処理後削除 |
@@ -213,6 +220,55 @@ evidence/YYYY/MM/<seal-id>/
 
 `manifest.json`は他の6ファイルのSHA-256と、どの`.ots`がどの対象をstampしたかを記録する。
 検証時は一覧ページではなくmanifest、署名、trusted RP/origin、OTSを検査する。
+
+### 所有者だけが見る対応台帳
+
+新規のGoogle Sheetを所有者のDriveに作り、tab名を`Ledger`へ変更する。リンク共有は無効のまま、
+既存のSkySeal service accountだけを**編集者**として共有する。`SkySeal Inbox`側の権限は
+**閲覧者**のまま変えない。Sheet URLの`/d/`と`/edit`の間のIDを使い、VPSで次を一度実行する。
+
+```bash
+sudo bash /opt/skyseal/deploy/configure_private_ledger_vps.sh \
+  --spreadsheet-id '<spreadsheet-id>'
+```
+
+成功時は`{"event": "private_ledger_ready"}`が出る。以後のsealには次が成立する。
+
+| 情報 | 保存先 | 公開性 |
+|---|---|---|
+| rootのファイル/フォルダ名、Drive IDとリンク | 非公開Sheetの行 | 非公開 |
+| snapshot digest、subject digest、件数、salt、receipt JSON | 非公開Sheetとagent DB | 非公開 |
+| `SHA256(JCS(receipt))` | Passkey署名済み`seal_payload` | 公開 |
+| descendant名、ファイル名ごとのhash対応 | 保存しない | なし |
+
+ここで「所有者だけ」とはGoogle共有設定上の意味である。これはend-to-end暗号化台帳ではなく、
+所有者に加えて、明示共有されたservice account、およびその鍵を制御できるVPS root/管理者は
+技術的に読める。第三者には監査対象の1行だけを所有者が選択して開示する。
+
+既存sealは署名時にこのcommitmentを含まないため、後から名前とSeal IDを対応付けても
+`reconstructed`な運用メモにしかならない。監査級の「承認時から結び付いていた」主張は、
+台帳を有効にした後の新規sealだけが持つ。
+
+### 第三者監査での使い方
+
+所有者は監査対象について、(1) 原ファイルまたは処理単位フォルダ、(2) Sheetの`receipt_json`を
+JSONファイル化したもの、(3) 公開proof URLを監査人へ渡す。監査人は次の二段階を独立実行する。
+
+```bash
+python3 verifier/skyseal_publication_verify.py ./evidence-directory \
+  --rp-id proof.excyberlab.net \
+  --origin https://proof.excyberlab.net
+
+python3 verifier/skyseal_private_ledger_verify.py \
+  receipt.json \
+  ./evidence-directory/seal.skyseal.json \
+  ./owner-disclosed-file-or-directory
+```
+
+第1段階はmanifest、ORCID+Passkey署名、User Present/User Verified、trusted RP/origin、OTSを検証する。
+第2段階は原バイトのハッシュ集合、receipt、公開されたPasskey署名済みcommitmentの一致を検証する。
+これにより監査人はGoogle Driveや所有者のSheet全体へアクセスせず、開示された対象だけを確認できる。
+Google Docs/Slides/Drawingsは処理時のPDF、Google SheetsはXLSXという**正確なexportバイト**が必要である。
 
 ## 6. 本番ホストの構成台帳
 
@@ -697,7 +753,8 @@ sudo systemctl is-active caddy
 - 本人性はORCID OAuthとUser-Verified Passkey activationの両方で成立する。現在の本番では
   OpenPGP署名や常時起動PCを必須にしない。
 - Google service accountにはDomain-wide delegationを与えず、専用InboxだけをViewer共有する。
-- Drive API field maskはファイル名を取得しない。公開サービスへはhash setと件数だけを送る。
+- 通常のDrive inventory field maskはファイル名を取得しない。台帳有効時だけroot名を別取得し、
+  公開サービスへはhash set、件数、salt付きreceiptのcommitmentだけを送る。
 - systemdは`NoNewPrivileges`、空のcapability、`ProtectSystem=strict`等を使用する。
 - agent/OTS unitではcore dumpとswapを禁止する。
 - Caddy access logはOAuth code漏えいを避けるため無効のままにする。

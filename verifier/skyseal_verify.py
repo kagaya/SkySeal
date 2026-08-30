@@ -315,7 +315,7 @@ def validate_payload(value: Any) -> dict[str, Any]:
         "nonce",
         "created_at",
     }
-    _require_exact_keys(payload, required, set(), "seal_payload")
+    _require_exact_keys(payload, required, {"private_ledger_commitment"}, "seal_payload")
     if payload["schema"] != PAYLOAD_SCHEMA:
         fail("seal_payload.schema: unsupported schema")
     _require_fullmatch(UUID7_RE, payload["seal_id"], "seal_payload.seal_id")
@@ -335,6 +335,12 @@ def validate_payload(value: Any) -> dict[str, Any]:
     _require_fullmatch(DIGEST_RE, payload["identity_state_digest"], "seal_payload.identity_state_digest")
     decode_base64url(payload["nonce"], "seal_payload.nonce", expected_length=32)
     validate_timestamp(payload["created_at"], "seal_payload.created_at")
+    if "private_ledger_commitment" in payload:
+        _require_fullmatch(
+            DIGEST_RE,
+            payload["private_ledger_commitment"],
+            "seal_payload.private_ledger_commitment",
+        )
     return payload
 
 

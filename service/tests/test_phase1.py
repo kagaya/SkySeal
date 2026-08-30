@@ -392,6 +392,7 @@ class Phase1FlowTests(unittest.TestCase):
         self.activate_with_passkey()
         agent_token = self.app.store.create_agent_token(ORCID)
         subject_digest = hashlib.sha256(b"private strict hash list\n").hexdigest()
+        ledger_commitment = "sha256:" + "a" * 64
         created = self.app.handle(
             "POST",
             "/api/v1/seals",
@@ -404,6 +405,7 @@ class Phase1FlowTests(unittest.TestCase):
                     "commitment_format": "skyseal-sha256-set-v1",
                     "subject_digest": subject_digest,
                     "entry_count": 3,
+                    "private_ledger_commitment": ledger_commitment,
                 },
                 separators=(",", ":"),
             ).encode(),
@@ -505,6 +507,10 @@ class Phase1FlowTests(unittest.TestCase):
         )
         self.assertEqual(agent_bundle.status, 200, agent_bundle.body)
         self.assertNotIn(b"drive", agent_bundle.body.lower())
+        self.assertEqual(
+            response_json(agent_bundle)["seal_payload"]["private_ledger_commitment"],
+            ledger_commitment,
+        )
 
         compact = ORCID.rsplit("/", 1)[-1]
         activation = self.app.handle(
@@ -521,6 +527,22 @@ class Phase1FlowTests(unittest.TestCase):
         self.assertEqual(seal["source"], "drive_agent")
         self.assertEqual(seal["identity_id"], ORCID)
         self.assertNotEqual(agent["token_hash"], agent_token)
+
+    def test_interactive_creation_cannot_inject_a_private_ledger_commitment(self) -> None:
+        response = self.app.handle(
+            "POST",
+            "/api/v1/seals",
+            {"Content-Type": "application/json"},
+            json.dumps(
+                {
+                    "commitment_format": "skyseal-sha256-set-v1",
+                    "subject_digest": "a" * 64,
+                    "entry_count": 1,
+                    "private_ledger_commitment": "sha256:" + "b" * 64,
+                }
+            ).encode(),
+        )
+        self.assertEqual(response.status, 401)
 
     def test_legacy_openpgp_identity_can_migrate_but_cannot_issue_agent_token_first(
         self,
