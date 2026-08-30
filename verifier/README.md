@@ -29,6 +29,16 @@ Test whether exact candidate bytes are a member:
 python3 verifier/skyseal_verify.py contains path/to/public.txt candidate.bin
 ```
 
+When the Seal ID is unknown, locate every manifest-controlled evidence package
+in a cloned public repository that contains the exact candidate bytes:
+
+```bash
+python3 verifier/skyseal_find.py candidate.bin ./evidence
+```
+
+This locator performs only the hash-membership search. Every returned directory
+must then pass the complete publication verification below.
+
 Verify a WebAuthn seal and its identity activation:
 
 ```bash

@@ -25,6 +25,64 @@ a time stamp system
 Existing root-level evidence files remain legacy artifacts and are not rewritten
 by the v1 work.
 
+## Independent or posthumous audit of a disclosed file
+
+An auditor does **not** need the private Google Sheet, the VPS database, the
+owner's Passkey, or access to Google Drive to verify that exact disclosed bytes
+were included in a public SkySeal seal. The public evidence contains the hash
+set, WebAuthn signature, public credential and ORCID-bound identity activation,
+manifest, and OpenTimestamps proofs needed for independent verification.
+
+The exact bytes matter. A PDF that has been re-exported, optimized, annotated,
+or otherwise rewritten is a different candidate even when it looks identical.
+
+Clone this repository and install the verifier plus OpenTimestamps client:
+
+```bash
+git clone https://github.com/kagaya/SkySeal.git
+cd SkySeal
+python3 -m venv .venv-audit
+. .venv-audit/bin/activate
+python3 -m pip install -r verifier/requirements.txt opentimestamps-client==0.7.2
+```
+
+Locate every public evidence directory containing the exact file:
+
+```bash
+python3 verifier/skyseal_find.py /path/to/disclosed-file ./evidence
+```
+
+For each reported `evidence_directory`, verify the complete package:
+
+```bash
+python3 verifier/skyseal_publication_verify.py \
+  ./evidence/YYYY/MM/<seal-id> \
+  --rp-id proof.excyberlab.net \
+  --origin https://proof.excyberlab.net
+```
+
+A successful report with `"ok": true`, the expected ORCID, User Present and
+User Verified signature checks, and confirmed OpenTimestamps establishes that
+the exact candidate hash was in the Passkey-approved set and that the timestamp
+targets existed before the independently attested Bitcoin time. No secret key
+or cooperation from the owner is required after sealing.
+
+For the current production identity, the expected `identity_id` is
+`https://orcid.org/0000-0003-3001-7690`. Associating that ORCID record with
+Katsushi Kagaya remains an identity-record question; the cryptographic proof
+binds the seal to that exact ORCID identifier and its activated Passkey.
+
+If OpenTimestamps is not yet confirmed, `--allow-pending-ots` verifies the other
+layers but does **not** establish independent time evidence. If the locator
+reports `member of a multi-hash seal`, it proves membership in a set rather
+than possession of the complete sealed unit.
+
+The private ledger receipt is optional for this byte-level audit. It is needed
+only for the additional claim that a seal corresponded to a particular private
+Drive name and Drive ID. SkySeal does not by itself prove authorship, scientific
+correctness, exclusive possession, or an exact creation time. See the
+[verifier guide](verifier/README.md) for detailed interpretation.
+
 ## Selected production deployment profile
 
 The root domain, DNS, VPS, HTTPS service, ORCID OAuth, and first iPhone Passkey
