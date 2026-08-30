@@ -1,6 +1,11 @@
 # SkySeal
 a time stamp system
 
+## Technical report
+
+- [SkySeal Technical Report v1.0: PDF, reproducible source, and independent
+  SkySeal records](docs/technical-report-v1.0/README.md)
+
 ## SkySeal v1.2 development
 
 - [Normative v1 core](spec/v1.md)
