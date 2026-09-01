@@ -83,6 +83,7 @@ class SkySealClient:
         hash_list: bytes,
         private_ledger_commitment: str | None = None,
         sky_witness: dict[str, object] | None = None,
+        private_display_name: str | None = None,
     ) -> SealTransaction:
         try:
             records = validate_hash_list_bytes(hash_list)
@@ -95,6 +96,14 @@ class SkySealClient:
         }
         if private_ledger_commitment is not None:
             payload["private_ledger_commitment"] = private_ledger_commitment
+        if private_display_name is not None:
+            if (
+                not private_display_name
+                or len(private_display_name.encode("utf-8")) > 1024
+                or any(ord(character) < 32 or ord(character) == 127 for character in private_display_name)
+            ):
+                raise SkySealAPIError("private display name is invalid")
+            payload["private_display_name"] = private_display_name
         if sky_witness is not None:
             payload["sky_witness"] = validate_sky_witness(sky_witness)
         response = self._object(

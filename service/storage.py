@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS seals (
     commitment_format TEXT NOT NULL,
     subject_digest TEXT NOT NULL,
     entry_count INTEGER NOT NULL,
+    private_display_name TEXT,
     private_ledger_commitment TEXT,
     sky_witness_json BLOB,
     source TEXT NOT NULL DEFAULT 'interactive' CHECK (source IN ('interactive', 'drive_agent')),
@@ -145,6 +146,10 @@ class Store:
                 if "private_ledger_commitment" not in seal_columns:
                     connection.execute(
                         "ALTER TABLE seals ADD COLUMN private_ledger_commitment TEXT"
+                    )
+                if "private_display_name" not in seal_columns:
+                    connection.execute(
+                        "ALTER TABLE seals ADD COLUMN private_display_name TEXT"
                     )
                 if "sky_witness_json" not in seal_columns:
                     connection.execute("ALTER TABLE seals ADD COLUMN sky_witness_json BLOB")
@@ -519,6 +524,7 @@ class Store:
         subject_digest: str,
         entry_count: int,
         lifetime_seconds: int,
+        private_display_name: str | None = None,
         private_ledger_commitment: str | None = None,
         sky_witness_json: bytes | None = None,
         identity_id: str | None = None,
@@ -531,9 +537,9 @@ class Store:
                 """
                 INSERT INTO seals
                 (seal_id, bearer_hash, commitment_format, subject_digest, entry_count,
-                 private_ledger_commitment, sky_witness_json, source, status, identity_id,
-                 created_at, expires_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+                 private_display_name, private_ledger_commitment, sky_witness_json, source,
+                 status, identity_id, created_at, expires_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
                 """,
                 (
                     seal_id,
@@ -541,6 +547,7 @@ class Store:
                     commitment_format,
                     subject_digest,
                     entry_count,
+                    private_display_name,
                     private_ledger_commitment,
                     sky_witness_json,
                     source,
@@ -558,7 +565,8 @@ class Store:
         with self.connect() as connection:
             connection.execute(
                 """
-                UPDATE seals SET status = 'expired', updated_at = ?
+                UPDATE seals
+                SET status = 'expired', private_display_name = NULL, updated_at = ?
                 WHERE expires_at < ? AND status IN ('pending', 'awaiting_assertion')
                 """,
                 (now, now),
@@ -566,8 +574,8 @@ class Store:
             return list(
                 connection.execute(
                     """
-                    SELECT seal_id, entry_count, status, created_at, expires_at,
-                           sky_witness_json
+                    SELECT seal_id, entry_count, private_display_name, status,
+                           created_at, expires_at, sky_witness_json
                     FROM seals
                     WHERE identity_id = ? AND source = 'drive_agent'
                       AND status IN ('pending', 'awaiting_assertion')
@@ -595,7 +603,8 @@ class Store:
         if row["expires_at"] < int(time.time()) and row["status"] not in {"approved", "expired"}:
             with self.connect() as connection:
                 connection.execute(
-                    "UPDATE seals SET status = 'expired', updated_at = ? WHERE seal_id = ?",
+                    "UPDATE seals SET status = 'expired', private_display_name = NULL, "
+                    "updated_at = ? WHERE seal_id = ?",
                     (int(time.time()), seal_id),
                 )
             return self.get_seal(seal_id, bearer)
@@ -654,7 +663,8 @@ class Store:
                 raise ValueError("seal is not awaiting an assertion")
             if current["challenge_expires_at"] < now:
                 connection.execute(
-                    "UPDATE seals SET status = 'expired', updated_at = ? WHERE seal_id = ?",
+                    "UPDATE seals SET status = 'expired', private_display_name = NULL, "
+                    "updated_at = ? WHERE seal_id = ?",
                     (now, seal_id),
                 )
                 raise ValueError("assertion challenge expired")
@@ -662,7 +672,7 @@ class Store:
                 """
                 UPDATE seals
                 SET assertion_hash = ?, bundle_json = ?, status = 'approved',
-                    challenge = NULL, updated_at = ?
+                    private_display_name = NULL, challenge = NULL, updated_at = ?
                 WHERE seal_id = ?
                 """,
                 (assertion_hash, bundle_json, now, seal_id),

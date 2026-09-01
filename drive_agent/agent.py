@@ -79,11 +79,12 @@ class AgentRuntime:
             if after_hash.snapshot_digest != unit.snapshot_digest:
                 self.store.observe(after_hash, observed_at)
                 continue
+            private_display_name = self.drive.get_private_display_name(unit.root.file_id)
             receipt = None
             if self.ledger is not None:
                 receipt = build_receipt(
                     drive_item_id=unit.root.file_id,
-                    drive_item_name=self.drive.get_private_display_name(unit.root.file_id),
+                    drive_item_name=private_display_name,
                     root_mime_type=unit.root.mime_type,
                     snapshot_digest=unit.snapshot_digest,
                     subject_digest=hashlib.sha256(hash_list).hexdigest(),
@@ -102,11 +103,16 @@ class AgentRuntime:
                     hash_list,
                     receipt.commitment if receipt is not None else None,
                     witness.metadata,
+                    private_display_name,
                 )
             elif receipt is not None:
-                transaction = self.skyseal.create(hash_list, receipt.commitment)
+                transaction = self.skyseal.create(
+                    hash_list, receipt.commitment, private_display_name=private_display_name
+                )
             else:
-                transaction = self.skyseal.create(hash_list)
+                transaction = self.skyseal.create(
+                    hash_list, private_display_name=private_display_name
+                )
             job = self.store.add_job(
                 unit_ref=row["unit_ref"],
                 snapshot_digest=unit.snapshot_digest,

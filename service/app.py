@@ -978,7 +978,7 @@ class Application:
             self._parse_json(body, "seal creation"),
             {"commitment_format", "subject_digest", "entry_count"},
             "seal creation",
-            {"private_ledger_commitment", "sky_witness"},
+            {"private_display_name", "private_ledger_commitment", "sky_witness"},
         )
         if request["commitment_format"] != HASH_LIST_FORMAT:
             raise VerificationError("unsupported commitment format")
@@ -992,6 +992,17 @@ class Application:
         agent = self._agent(headers)
         if authorization and agent is None:
             raise PermissionError("unsupported seal-creation authorization")
+        private_display_name = request.get("private_display_name")
+        if private_display_name is not None:
+            if agent is None:
+                raise PermissionError("private display names require a Drive agent")
+            if (
+                not isinstance(private_display_name, str)
+                or not private_display_name
+                or len(private_display_name.encode("utf-8")) > 1024
+                or any(ord(character) < 32 or ord(character) == 127 for character in private_display_name)
+            ):
+                raise VerificationError("private_display_name is invalid")
         private_ledger_commitment = request.get("private_ledger_commitment")
         if private_ledger_commitment is not None:
             if agent is None:
@@ -1012,6 +1023,7 @@ class Application:
             commitment_format=HASH_LIST_FORMAT,
             subject_digest=subject_digest,
             entry_count=entry_count,
+            private_display_name=private_display_name,
             private_ledger_commitment=private_ledger_commitment,
             sky_witness_json=(canonical_json(sky_witness) if sky_witness is not None else None),
             lifetime_seconds=self.config.transaction_lifetime_seconds,
@@ -1061,6 +1073,7 @@ class Application:
                     {
                         "seal_id": row["seal_id"],
                         "entry_count": row["entry_count"],
+                        "private_display_name": row["private_display_name"],
                         "status": row["status"],
                         "created_at": row["created_at"],
                         "expires_at": row["expires_at"],

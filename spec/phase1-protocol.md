@@ -5,8 +5,11 @@ Version: 1.1.0-draft.1
 Date: 2026-08-30
 
 This protocol connects a PC-local hash commitment to approval by an
-ORCID-bound WebAuthn credential. Original files, file names, paths, and the
-hash list itself do not cross the PC-to-service boundary.
+ORCID-bound WebAuthn credential. Original files, paths, descendant names, and
+the hash list itself do not cross the PC-to-service boundary. A Drive agent may
+send the direct-child root name as transient private inbox metadata. That name
+is available only to the authenticated identity, is not signed or published,
+and is erased when the transaction is approved or expires.
 
 ## 1. Trust boundary
 
@@ -141,6 +144,9 @@ credential owner, consumes the challenge exactly once, and creates the public
 `GET /api/v1/seals/{seal_id}` and
 `GET /api/v1/seals/{seal_id}/bundle` require the bearer token in the
 Authorization header. They expose no source names or paths.
+The authenticated identity-inbox response may expose the transient root display
+name while a Drive-agent transaction is pending. Bearer status and bundle
+responses never expose it.
 
 ## 6. Transaction states
 

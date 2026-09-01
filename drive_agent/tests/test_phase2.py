@@ -91,16 +91,19 @@ class FakeSkySeal:
         self.hash_lists: list[bytes] = []
         self.ledger_commitments: list[str | None] = []
         self.sky_witnesses: list[dict[str, object] | None] = []
+        self.private_display_names: list[str | None] = []
 
     def create(
         self,
         hash_list: bytes,
         ledger_commitment: str | None = None,
         sky_witness: dict[str, object] | None = None,
+        private_display_name: str | None = None,
     ) -> SealTransaction:
         self.hash_lists.append(hash_list)
         self.ledger_commitments.append(ledger_commitment)
         self.sky_witnesses.append(sky_witness)
+        self.private_display_names.append(private_display_name)
         number = len(self.hash_lists)
         return SealTransaction(
             seal_id=f"018f0000-0000-7000-8000-{number:012d}",
@@ -162,9 +165,13 @@ class AgentScanTests(unittest.TestCase):
             self.assertEqual(len(submitted), 1)
             self.assertEqual(len(skyseal.hash_lists), 1)
             self.assertEqual(submitted[0]["entry_count"], 1)
+            self.assertEqual(
+                skyseal.private_display_names, ["Owner-only research folder"]
+            )
             public_event = json.dumps(submitted)
             self.assertNotIn("private-unit-id", public_event)
             self.assertNotIn("private-file", public_event)
+            self.assertNotIn("Owner-only research folder", public_event)
             self.assertEqual(os.stat(config.database_path).st_mode & 0o777, 0o600)
 
             with store.connect() as connection:

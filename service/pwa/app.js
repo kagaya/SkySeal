@@ -74,6 +74,7 @@ function selectPendingSeal(seal) {
   state.sealId = seal.seal_id;
   state.bearer = null;
   element("seal-id").textContent = state.sealId;
+  element("private-display-name").textContent = seal.private_display_name || "旧トランザクション（名前情報なし）";
   element("confirmation-code").textContent = "承認開始後に表示";
   show("sky-witness-row", Boolean(seal.sky_witness));
   element("sky-witness-time").textContent = seal.sky_witness?.observation_time || "";
@@ -94,7 +95,8 @@ async function loadPending() {
     const sky = seal.sky_witness
       ? `・ひまわり観測 ${new Date(seal.sky_witness.observation_time).toLocaleString()}`
       : "";
-    description.textContent = `${created}・${seal.entry_count}件のハッシュ${sky}`;
+    const privateName = seal.private_display_name || "旧トランザクション（名前情報なし）";
+    description.textContent = `${privateName} — ${created}・${seal.entry_count}件のハッシュ${sky}`;
     const button = document.createElement("button");
     button.className = "secondary";
     button.textContent = "確認して承認";

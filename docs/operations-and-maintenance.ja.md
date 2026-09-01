@@ -166,8 +166,9 @@ JMA画像を現在の観測枠として検証できない回はsealを作らず�
 作る。大容量ファイル本体は再ダウンロードしない。拒否または無効化されたトランザクションは自動
 再試行しない。更新前に期限切れになったjobは`sudo skyseal-drive-retry <Seal ID>`で一度再投入する。
 
-承認画面には原ファイル、ファイル名、Drive上のパスを送らない。このため、複数候補がある場合は
-Seal ID、到着時刻、ハッシュ件数で選ぶ。
+承認画面では、ORCIDログイン済みの本人に限り、Inbox直下のrootファイル名またはフォルダ名を
+一時表示する。Driveパス、配下の名前、原ファイルは送らない。root名は署名対象・公開証拠・
+GitHub・Bearer API・ログに含めず、承認または期限切れ時にservice DBから削除する。
 
 ### 4.3 ハッシュ時の原ファイル
 
@@ -259,6 +260,7 @@ sudo bash /opt/skyseal/deploy/configure_private_ledger_vps.sh \
 | 情報 | 保存先 | 公開性 |
 |---|---|---|
 | rootのファイル/フォルダ名、Drive IDとリンク | 非公開Sheetの行 | 非公開 |
+| 承認待ちroot名 | service DBのpending行とログイン済み本人のPWA | 非公開、承認・期限切れ時にservice DBから削除 |
 | snapshot digest、subject digest、件数、salt、receipt JSON | 非公開Sheetとagent DB | 非公開 |
 | `SHA256(JCS(receipt))` | Passkey署名済み`seal_payload` | 公開 |
 | descendant名、ファイル名ごとのhash対応 | 保存しない | なし |
@@ -776,8 +778,9 @@ sudo systemctl is-active caddy
 - 本人性はORCID OAuthとUser-Verified Passkey activationの両方で成立する。現在の本番では
   OpenPGP署名や常時起動PCを必須にしない。
 - Google service accountにはDomain-wide delegationを与えず、専用InboxだけをViewer共有する。
-- 通常のDrive inventory field maskはファイル名を取得しない。台帳有効時だけroot名を別取得し、
-  公開サービスへはhash set、件数、salt付きreceiptのcommitmentだけを送る。
+- 通常のDrive inventory field maskはファイル名を取得しない。root名だけを別取得し、本人限定の
+  承認待ち表示と非公開台帳に使う。service DBのroot名は承認・期限切れ時に削除し、公開証拠へは
+  hash set、件数、salt付きreceiptのcommitmentだけを送る。
 - systemdは`NoNewPrivileges`、空のcapability、`ProtectSystem=strict`等を使用する。
 - agent/OTS unitではcore dumpとswapを禁止する。
 - Caddy access logはOAuth code漏えいを避けるため無効のままにする。

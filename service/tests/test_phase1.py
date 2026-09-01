@@ -17,7 +17,7 @@ from service.bootstrap_identity import valid_signature_fingerprints, verify_sign
 from service.cbor import CBORDecodeError, decode_one
 from service.config import Config
 from service.orcid import AuthenticatedORCID
-from service.storage import Store
+from service.storage import SCHEMA, Store
 from verifier.skyseal_verify import (
     VerificationError,
     canonical_json,
@@ -389,9 +389,9 @@ class Phase1FlowTests(unittest.TestCase):
         headers = dict(response.headers)
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         self.assertEqual(headers["X-Frame-Options"], "DENY")
-        self.assertIn(b'<script src="/app.js?v=5" defer></script>', response.body)
+        self.assertIn(b'<script src="/app.js?v=6" defer></script>', response.body)
         self.assertNotIn(b"<script>", response.body)
-        app_script = self.app.handle("GET", "/app.js?v=5")
+        app_script = self.app.handle("GET", "/app.js?v=6")
         self.assertEqual(app_script.status, 200)
         self.assertEqual(dict(app_script.headers)["Cache-Control"], "no-cache")
         self.assertIn(
@@ -401,7 +401,8 @@ class Phase1FlowTests(unittest.TestCase):
         self.assertNotIn(b"!state.sealId || !state.bearer", app_script.body)
         service_worker = self.app.handle("GET", "/sw.js")
         self.assertEqual(service_worker.status, 200)
-        self.assertIn(b'skyseal-pwa-v5', service_worker.body)
+        self.assertIn(b'skyseal-pwa-v6', service_worker.body)
+        self.assertIn(b'private-display-name', response.body)
         self.assertIn(b'fetch(event.request, {cache: "no-cache"})', service_worker.body)
 
     def test_drive_agent_creates_identity_inbox_transaction_without_public_source_metadata(self) -> None:
@@ -425,6 +426,7 @@ class Phase1FlowTests(unittest.TestCase):
                     "commitment_format": "skyseal-sha256-set-v1",
                     "subject_digest": subject_digest,
                     "entry_count": 3,
+                    "private_display_name": "Owner paper.pdf",
                     "private_ledger_commitment": ledger_commitment,
                     "sky_witness": sky_witness,
                 },
@@ -436,6 +438,7 @@ class Phase1FlowTests(unittest.TestCase):
         self.assertEqual(transaction["delivery"], "identity_inbox")
         self.assertEqual(transaction["approval_url"], ORIGIN + "/")
         self.assertNotIn("#", transaction["approval_url"])
+        self.assertNotIn("private_display_name", transaction)
 
         pending = self.app.handle("GET", "/api/v1/seals/pending", self.session_headers)
         self.assertEqual(pending.status, 200, pending.body)
@@ -446,6 +449,7 @@ class Phase1FlowTests(unittest.TestCase):
                 {
                     "seal_id": transaction["seal_id"],
                     "entry_count": 3,
+                    "private_display_name": "Owner paper.pdf",
                     "status": "pending",
                     "created_at": pending_object["seals"][0]["created_at"],
                     "expires_at": transaction["expires_at"],
@@ -464,6 +468,14 @@ class Phase1FlowTests(unittest.TestCase):
             self.app.handle("GET", "/api/v1/seals/pending", other_headers)
         )
         self.assertEqual(other_pending["seals"], [])
+        status = response_json(
+            self.app.handle(
+                "GET",
+                f"/api/v1/seals/{transaction['seal_id']}",
+                {"Authorization": f"Bearer {transaction['bearer_token']}"},
+            )
+        )
+        self.assertNotIn("private_display_name", status)
         denied = self.app.handle(
             "POST",
             f"/api/v1/seals/{transaction['seal_id']}/webauthn/options",
@@ -529,6 +541,7 @@ class Phase1FlowTests(unittest.TestCase):
         )
         self.assertEqual(agent_bundle.status, 200, agent_bundle.body)
         self.assertNotIn(b"drive", agent_bundle.body.lower())
+        self.assertNotIn(b"Owner paper.pdf", agent_bundle.body)
         self.assertEqual(
             response_json(agent_bundle)["seal_payload"]["private_ledger_commitment"],
             ledger_commitment,
@@ -585,6 +598,7 @@ class Phase1FlowTests(unittest.TestCase):
             agent = connection.execute("SELECT * FROM agent_tokens").fetchone()
         self.assertEqual(seal["source"], "drive_agent")
         self.assertEqual(seal["identity_id"], ORCID)
+        self.assertIsNone(seal["private_display_name"])
         self.assertNotEqual(agent["token_hash"], agent_token)
 
     def test_interactive_creation_cannot_inject_a_private_ledger_commitment(self) -> None:
@@ -602,6 +616,20 @@ class Phase1FlowTests(unittest.TestCase):
             ).encode(),
         )
         self.assertEqual(response.status, 401)
+        private_name = self.app.handle(
+            "POST",
+            "/api/v1/seals",
+            {"Content-Type": "application/json"},
+            json.dumps(
+                {
+                    "commitment_format": "skyseal-sha256-set-v1",
+                    "subject_digest": "a" * 64,
+                    "entry_count": 1,
+                    "private_display_name": "must-not-cross-interactive-boundary.pdf",
+                }
+            ).encode(),
+        )
+        self.assertEqual(private_name.status, 401)
 
     def test_legacy_openpgp_identity_can_migrate_but_cannot_issue_agent_token_first(
         self,
@@ -774,6 +802,72 @@ class PublicEvidencePageTests(unittest.TestCase):
 
 
 class LowLevelTests(unittest.TestCase):
+    def test_existing_seal_table_gains_private_display_name_without_data_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "legacy-seals.sqlite3"
+            legacy_schema = SCHEMA.replace("    private_display_name TEXT,\n", "")
+            with sqlite3.connect(database) as connection:
+                connection.executescript(legacy_schema)
+                connection.execute(
+                    """
+                    INSERT INTO seals
+                    (seal_id, bearer_hash, commitment_format, subject_digest,
+                     entry_count, source, status, created_at, expires_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, 'drive_agent', 'expired', ?, ?, ?)
+                    """,
+                    (
+                        "018f0000-0000-7000-8000-000000000001",
+                        "legacy-bearer-hash",
+                        "skyseal-sha256-set-v1",
+                        "a" * 64,
+                        1,
+                        100,
+                        200,
+                        200,
+                    ),
+                )
+            store = Store(database)
+            store.initialize()
+            with store.connect() as connection:
+                columns = {
+                    row["name"] for row in connection.execute("PRAGMA table_info(seals)")
+                }
+                legacy = connection.execute(
+                    "SELECT status, subject_digest, private_display_name FROM seals"
+                ).fetchone()
+            self.assertIn("private_display_name", columns)
+            self.assertEqual(legacy["status"], "expired")
+            self.assertEqual(legacy["subject_digest"], "a" * 64)
+            self.assertIsNone(legacy["private_display_name"])
+
+    def test_expiration_removes_private_display_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "expiration.sqlite3")
+            store.initialize()
+            _, seal = store.create_seal(
+                seal_id="018f0000-0000-7000-8000-000000000001",
+                commitment_format="skyseal-sha256-set-v1",
+                subject_digest="a" * 64,
+                entry_count=1,
+                lifetime_seconds=900,
+                private_display_name="Temporary owner-only name.pdf",
+                identity_id=ORCID,
+                source="drive_agent",
+            )
+            with store.connect() as connection:
+                connection.execute(
+                    "UPDATE seals SET expires_at = 0 WHERE seal_id = ?",
+                    (seal["seal_id"],),
+                )
+            self.assertEqual(store.list_pending_seals(ORCID), [])
+            with store.connect() as connection:
+                expired = connection.execute(
+                    "SELECT status, private_display_name FROM seals WHERE seal_id = ?",
+                    (seal["seal_id"],),
+                ).fetchone()
+            self.assertEqual(expired["status"], "expired")
+            self.assertIsNone(expired["private_display_name"])
+
     def test_cbor_rejects_indefinite_and_trailing_data(self) -> None:
         with self.assertRaises(CBORDecodeError):
             decode_one(b"\x9f\xff")

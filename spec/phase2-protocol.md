@@ -26,9 +26,10 @@ folder is shared read-only with that address. Domain-wide delegation is not
 required and should not be enabled.
 
 The hashing inventory's Drive API field mask intentionally omits `name`.
-Names are not needed for hashing. If the owner ledger is enabled, a separate
-metadata request obtains the direct-child root name solely for the private
-receipt; descendants' names and the file-to-hash mapping remain absent.
+Names are not needed for hashing. A separate metadata request obtains only the
+direct-child root name for the private receipt and the authenticated identity
+inbox. The service erases its transient copy on approval or expiry. Descendants'
+names and the file-to-hash mapping remain absent.
 
 ### 1.1 Optional owner-only ledger
 
@@ -124,7 +125,9 @@ authorized by the identity session without copying the private agent bearer to
 the phone.
 
 For a sky-witness seal, the pending list and approval view also show the public
-Himawari observation time. They still receive no Drive names, paths or bytes.
+Himawari observation time. The authenticated owner additionally sees the
+transient direct-child root name. The interface receives no Drive path,
+descendant names or bytes, and the root name is never added to public evidence.
 
 ## 5. Approval and retrieval
 

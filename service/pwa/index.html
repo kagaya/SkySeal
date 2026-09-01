@@ -7,7 +7,7 @@
   <title>SkySeal Approval</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/styles.css">
-  <script src="/app.js?v=5" defer></script>
+  <script src="/app.js?v=6" defer></script>
 </head>
 <body>
   <main>
@@ -36,14 +36,15 @@
 
     <section id="pending-card" class="card hidden" aria-labelledby="pending-title">
       <h2 id="pending-title">Driveからの承認待ち</h2>
-      <p>公開側へファイル名を渡さず、到着時刻、ハッシュ件数、ひまわり観測時刻を表示します。</p>
+      <p>本人確認済みのこの画面だけに、Inbox直下のファイル名またはフォルダ名を一時表示します。名前は公開証拠やGitHubには含まれず、承認または期限切れ後にサーバーから削除されます。</p>
       <div id="pending-list" class="pending-list"></div>
     </section>
 
     <section id="approval-card" class="card hidden" aria-labelledby="approval-title">
       <h2 id="approval-title">シール承認</h2>
-      <p>元ファイル、ファイル名、パスは公開側のWebサービスには送られていません。</p>
+      <p>下の対象名は本人確認済み画面の一時情報です。元ファイル、Driveパス、配下の個別名は送られず、対象名も公開証拠には含まれません。</p>
       <dl>
+        <div><dt>対象</dt><dd id="private-display-name" dir="auto"></dd></div>
         <div><dt>Seal ID</dt><dd id="seal-id"></dd></div>
         <div><dt>確認コード</dt><dd id="confirmation-code">承認開始後に表示</dd></div>
         <div id="sky-witness-row" class="hidden"><dt>ひまわり観測</dt><dd id="sky-witness-time"></dd></div>
