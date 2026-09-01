@@ -152,9 +152,10 @@ pending -> awaiting_assertion -> approved
 ```
 
 A source-side CLI may abandon a transaction at any time. An assertion challenge
-expires after five minutes and can be consumed once. A transaction expires
-after fifteen minutes. Repeating a byte-identical completed assertion is
-idempotent; a different assertion is rejected.
+expires after five minutes and can be consumed once. A transaction expiry is
+deployment-configurable from fifteen minutes through seven days; the reference
+deployment uses twenty-four hours. Repeating a byte-identical completed
+assertion is idempotent; a different assertion is rejected.
 
 ## 7. Phase 1 publication boundary
 

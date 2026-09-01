@@ -154,13 +154,17 @@ flowchart TD
 5. JMAから直近の10分間隔のひまわりBand 13画像を取得する。日ごとに再利用されるHHMM形式の
    URLなので、`Last-Modified`の日付・時刻、JPEG形式、上限サイズを検証する。
 6. `skyseal-sha256-set-v1`形式のハッシュ一覧はagent内に保持し、その一覧自体のダイジェスト、
-   件数、ひまわり画像SHA-256と公開観測メタデータを公開サービスへ送り、15分有効の承認
+   件数、ひまわり画像SHA-256と公開観測メタデータを公開サービスへ送り、既定で24時間有効の承認
    トランザクションを作る。
 7. ORCIDログイン済みPWAには、Seal ID、時刻、ハッシュ件数、ひまわり観測時刻、状態を表示する。
 8. 利用者が対象を選び、iPhone/iPadのPasskeyで明示的に承認する。
 
 JMA画像を現在の観測枠として検証できない回はsealを作らず、次のtimerで再試行する。
 `SKYSEAL_SKY_WITNESS_MODE=required`が本番値であり、設定検査は`off`を拒否する。
+承認トランザクションが期限切れになった場合、agentはDriveの非公開スナップショットが同一である
+ことを再確認し、保存済みハッシュ一覧のダイジェストと形式を検証してから新しいトランザクションを
+作る。大容量ファイル本体は再ダウンロードしない。拒否または無効化されたトランザクションは自動
+再試行しない。更新前に期限切れになったjobは`retry-expired --seal-id <Seal ID>`で一度再投入する。
 
 承認画面には原ファイル、ファイル名、Drive上のパスを送らない。このため、複数候補がある場合は
 Seal ID、到着時刻、ハッシュ件数で選ぶ。
@@ -686,7 +690,7 @@ sudo -u skyseal /opt/skyseal/.venv/bin/python -c \
 | `OpenTimestamps operation failed` | OTS network/cache/calendar問題 | `XDG_CACHE_HOME`、DNS、時刻、journalを確認。承認済みjobは再実行可能 |
 | `no current JMA Himawari observation was accepted` | JMA未配信、通信障害、古いHHMM画像を安全に拒否 | 原ファイルjobは未作成なので次回timerを待つ。継続時はVPSからJMA HTTPS、DNS、システムUTCを確認し、`off`で回避しない |
 | `/nonexistent/.cache/ots` PermissionError | 古いunitまたは環境 | 最新unitの`XDG_CACHE_HOME=/var/lib/skyseal-agent/cache`を確認し`sudo skyseal-update` |
-| PWAに「承認トランザクションがありません」 | 古いPWA cache、期限切れ、対象選択消失 | Safariで再読込、最新asset確認、15分以内の新しいpendingを選択 |
+| PWAに「承認トランザクションがありません」 | 古いPWA cache、期限切れ、対象選択消失 | Safariで再読込、最新asset確認、agentが期限切れjobを再発行したことをjournalで確認。更新前のjobは`retry-expired`で再投入 |
 | GitHubだけ見えない | mirror失敗 | `/proofs/`でVPS証拠を確認。`github_status`とjournalを見る。自動再試行 |
 | `dubious ownership` | `/opt/skyseal`はroot所有 | `sudo git -C /opt/skyseal ...`か`sudo skyseal-update`を使う |
 | `fetch first`でpush拒否 | remoteが先行 | 作業cloneで`git pull --rebase origin main`、確認後push |

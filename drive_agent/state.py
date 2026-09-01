@@ -9,21 +9,7 @@ from pathlib import Path
 from drive_agent.google_drive import DriveUnit, validate_hash_list_bytes
 
 
-SCHEMA = """
-PRAGMA foreign_keys = ON;
-
-CREATE TABLE IF NOT EXISTS units (
-    unit_ref TEXT PRIMARY KEY,
-    drive_unit_id TEXT NOT NULL UNIQUE,
-    root_mime_type TEXT NOT NULL,
-    snapshot_digest TEXT NOT NULL,
-    stable_since INTEGER NOT NULL,
-    last_seen INTEGER NOT NULL,
-    last_submitted_snapshot TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-);
-
+JOBS_TABLE = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id INTEGER PRIMARY KEY AUTOINCREMENT,
     unit_ref TEXT NOT NULL REFERENCES units(unit_ref) ON DELETE RESTRICT,
@@ -55,12 +41,25 @@ CREATE TABLE IF NOT EXISTS jobs (
     github_error TEXT,
     error_code TEXT,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    UNIQUE(unit_ref, snapshot_digest)
+    updated_at INTEGER NOT NULL
 );
+"""
 
-CREATE INDEX IF NOT EXISTS jobs_status_created
-ON jobs(status, created_at);
+
+SCHEMA = """
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS units (
+    unit_ref TEXT PRIMARY KEY,
+    drive_unit_id TEXT NOT NULL UNIQUE,
+    root_mime_type TEXT NOT NULL,
+    snapshot_digest TEXT NOT NULL,
+    stable_since INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    last_submitted_snapshot TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 """
 
 
@@ -86,6 +85,7 @@ class AgentStore:
             with self.connect() as connection:
                 connection.execute("PRAGMA journal_mode = WAL")
                 connection.executescript(SCHEMA)
+                connection.executescript(JOBS_TABLE)
                 job_columns = {
                     row["name"] for row in connection.execute("PRAGMA table_info(jobs)")
                 }
@@ -116,6 +116,15 @@ class AgentStore:
                     connection.execute("ALTER TABLE jobs ADD COLUMN sky_witness_json BLOB")
                 if "sky_witness_image" not in job_columns:
                     connection.execute("ALTER TABLE jobs ADD COLUMN sky_witness_image BLOB")
+                self._migrate_retryable_jobs(connection)
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS jobs_status_created "
+                    "ON jobs(status, created_at)"
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS jobs_unit_snapshot_created "
+                    "ON jobs(unit_ref, snapshot_digest, created_at)"
+                )
         finally:
             os.umask(previous_umask)
         for candidate in (
@@ -125,6 +134,33 @@ class AgentStore:
         ):
             if candidate.exists():
                 os.chmod(candidate, 0o600)
+
+    @staticmethod
+    def _migrate_retryable_jobs(connection: sqlite3.Connection) -> None:
+        table = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'"
+        ).fetchone()
+        if table is None or table["sql"] is None:
+            raise ValueError("jobs table is missing after initialization")
+        compact_sql = "".join(str(table["sql"]).lower().split())
+        if "unique(unit_ref,snapshot_digest)" not in compact_sql:
+            return
+
+        connection.execute("ALTER TABLE jobs RENAME TO jobs_before_retry_support")
+        connection.executescript(JOBS_TABLE)
+        columns = (
+            "job_id, unit_ref, snapshot_digest, status, hash_list, subject_digest, "
+            "entry_count, seal_id, bearer_token, approval_url, bundle_json, genesis_json, "
+            "identity_activation, ots_proof, identity_ots_proof, publication_prefix, "
+            "ledger_receipt, ledger_commitment, ledger_status, ledger_error, "
+            "sky_witness_json, sky_witness_image, github_status, github_error, "
+            "error_code, created_at, updated_at"
+        )
+        connection.execute(
+            f"INSERT INTO jobs ({columns}) "
+            f"SELECT {columns} FROM jobs_before_retry_support"
+        )
+        connection.execute("DROP TABLE jobs_before_retry_support")
 
     def observe(self, unit: DriveUnit, now: int | None = None) -> str:
         observed_at = int(time.time()) if now is None else now
@@ -189,6 +225,29 @@ class AgentStore:
                 (observed_at - settle_seconds,),
             ).fetchall()
         return list(rows)
+
+    def cached_expired_hash_list(
+        self, unit_ref: str, snapshot_digest: str
+    ) -> bytes | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT hash_list, subject_digest
+                FROM jobs
+                WHERE unit_ref = ? AND snapshot_digest = ?
+                  AND status = 'error' AND error_code = 'seal_expired'
+                ORDER BY updated_at DESC, job_id DESC
+                LIMIT 1
+                """,
+                (unit_ref, snapshot_digest),
+            ).fetchone()
+        if row is None:
+            return None
+        hash_list = bytes(row["hash_list"])
+        validate_hash_list_bytes(hash_list)
+        if hashlib.sha256(hash_list).hexdigest() != row["subject_digest"]:
+            raise ValueError("cached expired hash list digest does not match")
+        return hash_list
 
     def add_job(
         self,
@@ -419,9 +478,70 @@ class AgentStore:
             if cursor.rowcount != 1:
                 raise ValueError("published job not found for private-ledger retry state")
 
-    def mark_error(self, seal_id: str, error_code: str) -> None:
+    def mark_error(self, seal_id: str, error_code: str, *, retryable: bool = False) -> None:
         with self.connect() as connection:
-            connection.execute(
+            job = connection.execute(
+                "SELECT unit_ref, snapshot_digest FROM jobs WHERE seal_id = ?",
+                (seal_id,),
+            ).fetchone()
+            if job is None:
+                raise ValueError("job not found for error state")
+            cursor = connection.execute(
                 "UPDATE jobs SET status = 'error', error_code = ?, updated_at = ? WHERE seal_id = ?",
                 (error_code[:120], int(time.time()), seal_id),
             )
+            if cursor.rowcount != 1:
+                raise ValueError("job not found for error state")
+            if retryable:
+                self._make_snapshot_retryable(connection, job, seal_id)
+
+    @staticmethod
+    def _make_snapshot_retryable(
+        connection: sqlite3.Connection, job: sqlite3.Row, seal_id: str
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE units
+            SET last_submitted_snapshot = NULL, updated_at = ?
+            WHERE unit_ref = ? AND snapshot_digest = ?
+              AND last_submitted_snapshot = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM jobs
+                  WHERE unit_ref = ? AND snapshot_digest = ?
+                    AND seal_id != ?
+                    AND status IN ('pending_approval', 'approved', 'published')
+              )
+            """,
+            (
+                int(time.time()),
+                job["unit_ref"],
+                job["snapshot_digest"],
+                job["snapshot_digest"],
+                job["unit_ref"],
+                job["snapshot_digest"],
+                seal_id,
+            ),
+        )
+
+    def requeue_expired(self, seal_id: str) -> sqlite3.Row:
+        with self.connect() as connection:
+            job = connection.execute(
+                """
+                SELECT unit_ref, snapshot_digest
+                FROM jobs
+                WHERE seal_id = ? AND status = 'error' AND error_code = 'seal_expired'
+                """,
+                (seal_id,),
+            ).fetchone()
+            if job is None:
+                raise ValueError("expired job is not available for retry")
+            unit = connection.execute(
+                "SELECT snapshot_digest FROM units WHERE unit_ref = ?",
+                (job["unit_ref"],),
+            ).fetchone()
+            if unit is None or unit["snapshot_digest"] != job["snapshot_digest"]:
+                raise ValueError("Drive snapshot changed after the expired job")
+            self._make_snapshot_retryable(connection, job, seal_id)
+            return connection.execute(
+                "SELECT * FROM jobs WHERE seal_id = ?", (seal_id,)
+            ).fetchone()

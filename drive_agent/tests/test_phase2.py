@@ -29,7 +29,7 @@ from drive_agent.publication import (
 from drive_agent.private_ledger import GoogleSheetsPrivateLedger, build_receipt
 from drive_agent.skyseal import SealTransaction
 from drive_agent.sky_witness import JMAHimawariWitness, SkyWitnessError, SkyWitnessRecord
-from drive_agent.state import AgentStore
+from drive_agent.state import JOBS_TABLE, AgentStore
 
 
 def binary_file(file_id: str, content: bytes, modified: str = "2026-08-29T00:00:00Z") -> DriveFile:
@@ -66,6 +66,7 @@ class FakeDrive:
             "private-file-b": b"same private research bytes",
         }
         self.modified = "2026-08-29T00:00:00Z"
+        self.content_reads = 0
 
     def list_children(self, folder_id: str) -> list[DriveFile]:
         if folder_id == "private-inbox-id":
@@ -78,6 +79,7 @@ class FakeDrive:
         return []
 
     def iter_content(self, item: DriveFile):
+        self.content_reads += 1
         yield self.contents[item.file_id]
 
     def get_private_display_name(self, file_id: str) -> str:
@@ -179,6 +181,148 @@ class AgentScanTests(unittest.TestCase):
             self.assertEqual(len(second), 1)
             self.assertEqual(len(skyseal.hash_lists), 2)
             self.assertEqual(second[0]["entry_count"], 2)
+
+    def test_expired_job_retries_from_verified_cache_without_redownload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = AgentConfig(
+                database_path=root / "agent.sqlite3",
+                work_directory=root / "work",
+                public_root=root / "public",
+                google_service_account_file=root / "unused-google.json",
+                drive_folder_id="private-inbox-id",
+                skyseal_server="https://seal.example.org",
+                skyseal_rp_id="seal.example.org",
+                skyseal_agent_token_file=root / "unused-agent-token",
+                github_owner="kagaya",
+                github_repository="SkySeal",
+                github_token_file=root / "unused-github-token",
+                settle_seconds=0,
+            )
+            store = AgentStore(config.database_path)
+            store.initialize()
+            drive = FakeDrive()
+            skyseal = FakeSkySeal()
+            runtime = AgentRuntime(config, drive, skyseal, FakePublisher(), store)
+
+            first = runtime.scan(now=100)
+            reads_after_first = drive.content_reads
+            store.mark_error(
+                first[0]["seal_id"], "seal_expired", retryable=True
+            )
+            second = runtime.scan(now=101)
+
+            self.assertEqual(len(second), 1)
+            self.assertEqual(second[0]["hash_source"], "cached_expired")
+            self.assertEqual(drive.content_reads, reads_after_first)
+            self.assertEqual(skyseal.hash_lists[0], skyseal.hash_lists[1])
+            with store.connect() as connection:
+                jobs = connection.execute(
+                    "SELECT status, error_code FROM jobs ORDER BY job_id"
+                ).fetchall()
+            self.assertEqual(len(jobs), 2)
+            self.assertEqual(
+                (jobs[0]["status"], jobs[0]["error_code"]),
+                ("error", "seal_expired"),
+            )
+            self.assertEqual(jobs[1]["status"], "pending_approval")
+
+    def test_pre_update_expired_job_can_be_explicitly_requeued(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = AgentConfig(
+                database_path=root / "agent.sqlite3",
+                work_directory=root / "work",
+                public_root=root / "public",
+                google_service_account_file=root / "unused-google.json",
+                drive_folder_id="private-inbox-id",
+                skyseal_server="https://seal.example.org",
+                skyseal_rp_id="seal.example.org",
+                skyseal_agent_token_file=root / "unused-agent-token",
+                github_owner="kagaya",
+                github_repository="SkySeal",
+                github_token_file=root / "unused-github-token",
+                settle_seconds=0,
+            )
+            store = AgentStore(config.database_path)
+            store.initialize()
+            runtime = AgentRuntime(
+                config, FakeDrive(), FakeSkySeal(), FakePublisher(), store
+            )
+            first = runtime.scan(now=100)
+            store.mark_error(first[0]["seal_id"], "seal_expired")
+            self.assertEqual(store.ready_units(0, now=101), [])
+
+            store.requeue_expired(first[0]["seal_id"])
+            self.assertEqual(len(store.ready_units(0, now=101)), 1)
+
+    def test_rejected_job_is_not_automatically_retried(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = AgentConfig(
+                database_path=root / "agent.sqlite3",
+                work_directory=root / "work",
+                public_root=root / "public",
+                google_service_account_file=root / "unused-google.json",
+                drive_folder_id="private-inbox-id",
+                skyseal_server="https://seal.example.org",
+                skyseal_rp_id="seal.example.org",
+                skyseal_agent_token_file=root / "unused-agent-token",
+                github_owner="kagaya",
+                github_repository="SkySeal",
+                github_token_file=root / "unused-github-token",
+                settle_seconds=0,
+            )
+            store = AgentStore(config.database_path)
+            store.initialize()
+            runtime = AgentRuntime(
+                config, FakeDrive(), FakeSkySeal(), FakePublisher(), store
+            )
+            first = runtime.scan(now=100)
+            store.mark_error(first[0]["seal_id"], "seal_rejected")
+            self.assertEqual(runtime.scan(now=101), [])
+
+    def test_legacy_unique_snapshot_schema_migrates_without_losing_job(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = AgentStore(root / "agent.sqlite3")
+            store.initialize()
+            drive = FakeDrive()
+            unit = inventory_unit(drive, drive.inbox)
+            reference = store.observe(unit, now=100)
+            legacy_jobs = JOBS_TABLE.replace(
+                "updated_at INTEGER NOT NULL\n);",
+                "updated_at INTEGER NOT NULL,\n    UNIQUE(unit_ref, snapshot_digest)\n);",
+            )
+            with store.connect() as connection:
+                connection.execute("DROP TABLE jobs")
+                connection.executescript(legacy_jobs)
+            first = store.add_job(
+                unit_ref=reference,
+                snapshot_digest=unit.snapshot_digest,
+                hash_list=hash_unit(drive, unit),
+                seal_id="018f0000-0000-7000-8000-000000000001",
+                bearer_token="private-bearer-1",
+                approval_url="https://seal.example.org/",
+                now=100,
+            )
+
+            store.initialize()
+            store.mark_error(first["seal_id"], "seal_expired", retryable=True)
+            second = store.add_job(
+                unit_ref=reference,
+                snapshot_digest=unit.snapshot_digest,
+                hash_list=bytes(first["hash_list"]),
+                seal_id="018f0000-0000-7000-8000-000000000002",
+                bearer_token="private-bearer-2",
+                approval_url="https://seal.example.org/",
+                now=101,
+            )
+            self.assertEqual(second["status"], "pending_approval")
+            with store.connect() as connection:
+                self.assertEqual(
+                    connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 2
+                )
 
     def test_sky_witness_is_sent_for_signing_and_kept_for_publication(self) -> None:
         metadata = {

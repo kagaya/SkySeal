@@ -61,7 +61,7 @@ class Config:
     allow_unsealed_identity: bool = False
     allow_http_localhost: bool = False
     session_lifetime_seconds: int = 8 * 60 * 60
-    transaction_lifetime_seconds: int = 15 * 60
+    transaction_lifetime_seconds: int = 24 * 60 * 60
     assertion_lifetime_seconds: int = 5 * 60
     public_root: Path | None = None
 
@@ -81,6 +81,8 @@ class Config:
             raise ValueError("SKYSEAL_OPENPGP_FINGERPRINT must be 40 uppercase hex characters")
         if not 1 <= self.bind_port <= 65535:
             raise ValueError("SKYSEAL_PORT is out of range")
+        if not 15 * 60 <= self.transaction_lifetime_seconds <= 7 * 24 * 60 * 60:
+            raise ValueError("transaction lifetime must be between 15 minutes and 7 days")
         if self.allow_mock_orcid and self.bind_host not in {"127.0.0.1", "::1", "localhost"}:
             raise ValueError("mock ORCID mode may bind only to loopback")
         if self.allow_unsealed_identity and self.bind_host not in {
@@ -120,6 +122,9 @@ class Config:
                 os.getenv("SKYSEAL_DEV_ALLOW_UNSEALED_IDENTITY")
             ),
             allow_http_localhost=allow_http,
+            transaction_lifetime_seconds=int(
+                os.getenv("SKYSEAL_TRANSACTION_LIFETIME_SECONDS", "86400")
+            ),
             public_root=Path(
                 os.getenv("SKYSEAL_PUBLIC_ROOT", "/var/lib/skyseal-public")
             ).resolve(),

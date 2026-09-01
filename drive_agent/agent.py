@@ -69,7 +69,12 @@ class AgentRuntime:
             unit = current_units.get(row["unit_ref"])
             if unit is None or not unit.files:
                 continue
-            hash_list = hash_unit(self.drive, unit)
+            hash_list = self.store.cached_expired_hash_list(
+                row["unit_ref"], unit.snapshot_digest
+            )
+            reused_hashes = hash_list is not None
+            if hash_list is None:
+                hash_list = hash_unit(self.drive, unit)
             after_hash = inventory_unit(self.drive, unit.root)
             if after_hash.snapshot_digest != unit.snapshot_digest:
                 self.store.observe(after_hash, observed_at)
@@ -123,6 +128,7 @@ class AgentRuntime:
                     "seal_id": job["seal_id"],
                     "entry_count": job["entry_count"],
                     "approval_url": job["approval_url"],
+                    "hash_source": "cached_expired" if reused_hashes else "drive",
                 }
             )
         return submitted
@@ -143,7 +149,11 @@ class AgentRuntime:
                 )
                 events.append({"seal_id": job["seal_id"], "event": "approved"})
             elif status in {"expired", "rejected", "invalidated"}:
-                self.store.mark_error(job["seal_id"], f"seal_{status}")
+                self.store.mark_error(
+                    job["seal_id"],
+                    f"seal_{status}",
+                    retryable=status == "expired",
+                )
                 events.append({"seal_id": job["seal_id"], "event": status})
 
         for job in self.store.jobs_with_status("approved"):
@@ -274,7 +284,12 @@ def build_parser() -> argparse.ArgumentParser:
             "localize",
             "pending",
             "ledger-check",
+            "retry-expired",
         ),
+    )
+    parser.add_argument(
+        "--seal-id",
+        help="expired seal ID to make eligible for a cached retry",
     )
     return parser
 
@@ -311,6 +326,18 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("private ledger is not configured")
             runtime.ledger.check()
             print_events([{"event": "private_ledger_ready"}])
+        elif args.command == "retry-expired":
+            if not args.seal_id:
+                raise ConfigurationError("retry-expired requires --seal-id")
+            job = runtime.store.requeue_expired(args.seal_id)
+            print_events(
+                [
+                    {
+                        "seal_id": job["seal_id"],
+                        "event": "expired_retry_queued",
+                    }
+                ]
+            )
         else:
             while True:
                 print_events(runtime.scan())
