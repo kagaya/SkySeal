@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Safely requeue one pre-update expired Drive approval and run the agent once.
+
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+TIMER=skyseal-drive-agent.timer
+SERVICE=skyseal-drive-agent.service
+LOCK=/var/lib/skyseal-agent/drive-agent.lock
+TIMER_WAS_ACTIVE=0
+LOCK_HELD=0
+
+usage() {
+  printf 'Usage: sudo skyseal-drive-retry <expired-seal-id>\n'
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+  if ((LOCK_HELD)); then
+    flock -u 9 || true
+    exec 9>&-
+  fi
+  if ((TIMER_WAS_ACTIVE)); then
+    systemctl start "$TIMER" || true
+  fi
+  exit "$status"
+}
+
+run_agent() {
+  runuser -u skyseal-agent -- env \
+    XDG_CACHE_HOME=/var/lib/skyseal-agent/cache \
+    PATH=/opt/skyseal/.venv-agent/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin \
+    bash -c 'set -a; . /etc/skyseal-agent/agent.env; set +a; exec /opt/skyseal/.venv-agent/bin/python /opt/skyseal/drive_agent/agent.py "$@"' \
+    skyseal-drive-retry "$@"
+}
+
+trap cleanup EXIT
+
+((EUID == 0)) || {
+  usage >&2
+  printf 'ERROR: run with sudo\n' >&2
+  exit 1
+}
+[[ $# == 1 ]] || {
+  usage >&2
+  exit 1
+}
+SEAL_ID=$1
+[[ "$SEAL_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+  printf 'ERROR: invalid seal ID\n' >&2
+  exit 1
+}
+
+if systemctl is-active --quiet "$TIMER"; then
+  TIMER_WAS_ACTIVE=1
+fi
+systemctl stop "$TIMER"
+exec 9>"$LOCK"
+flock --wait 120 9 || {
+  printf 'ERROR: Drive agent did not become idle within 120 seconds\n' >&2
+  exit 1
+}
+LOCK_HELD=1
+
+run_agent retry-expired --seal-id "$SEAL_ID"
+
+flock -u 9
+exec 9>&-
+LOCK_HELD=0
+if ((TIMER_WAS_ACTIVE)); then
+  systemctl start "$TIMER"
+fi
+systemctl start "$SERVICE"
+run_agent pending
+
+trap - EXIT
+printf 'Expired Drive approval was requeued and the agent pass completed.\n'

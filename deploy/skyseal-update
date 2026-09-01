@@ -221,6 +221,8 @@ systemctl is-active --quiet caddy || fail "caddy is not active"
 log "Installing the reusable update command"
 install -o root -g root -m 0755 "$REPOSITORY/deploy/skyseal-update" \
   /usr/local/sbin/skyseal-update
+install -o root -g root -m 0755 "$REPOSITORY/deploy/skyseal-drive-retry" \
+  /usr/local/sbin/skyseal-drive-retry
 
 flock -u 9
 exec 9>&-
