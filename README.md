@@ -1,6 +1,14 @@
 # SkySeal
 a time stamp system
 
+## Windows desktop development
+
+- [Local Windows application: setup, build, and validation (Japanese)](desktop/README.ja.md)
+- The desktop application runs the sealing workflow on the PC and contacts
+  ORCID, JMA, and timestamp services directly. Its explicitly versioned local
+  proof profile is experimental; production ORCID and Windows Hello acceptance
+  testing is required before treating this development build as a release.
+
 ## Technical report
 
 - [SkySeal Technical Report v1.0: PDF, reproducible source, and independent
