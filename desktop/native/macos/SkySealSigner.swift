@@ -19,6 +19,18 @@ let keyPrefix = "skyseal-key-"
 let keyLabel = "SkySeal researcher signing key"
 let maximumRequestBytes = 16384
 
+// Apple's legacy Keychain prompt serializer mutates the 16-bit flags with htons
+// in both exportBlob passes; real macOS CI read back 0x0001 as 0x0100. Keep the
+// actual REQUIRE_PASSPHRASE bit set in either byte order. The mirrored 0x0100 bit
+// is reserved and has no consumer in the audited source; this does not enable
+// the unsigned/invalid-client overrides (0x10, 0x20, 0x40, 0x80). This is a narrow
+// legacy compatibility workaround, not permission to normalize a swapped-only
+// value: every stored policy must still contain the real 0x0001 bit.
+// https://github.com/apple-oss-distributions/Security/blob/db15acbe6a7f257a859ad9a3bb86097bfe0679d9/securityd/src/acl_keychain.cpp
+// https://github.com/apple-oss-distributions/Security/blob/db15acbe6a7f257a859ad9a3bb86097bfe0679d9/OSX/libsecurity_keychain/lib/SecACL.h
+let requiredPasswordBit = SecKeychainPromptSelector.requirePassphase.rawValue
+let passwordPromptSelector = SecKeychainPromptSelector(rawValue: requiredPasswordBit | requiredPasswordBit.byteSwapped)
+
 struct SignerError: Error {
     let code: String
     let message: String
@@ -87,10 +99,11 @@ func requirePrompt(_ acl: SecACL) throws {
     var selector = SecKeychainPromptSelector(rawValue: 0)
     try check(SecACLCopyContents(acl, &applications, &description, &selector), "Cannot inspect signing permission")
     guard let applications = applications, CFArrayGetCount(applications) == 0,
-          selector.contains(.requirePassphase) else {
+          selector.contains(.requirePassphase),
+          selector.rawValue == requiredPasswordBit || selector.rawValue == passwordPromptSelector.rawValue else {
         let trustedCount = applications.map { String(CFArrayGetCount($0)) } ?? "unrestricted"
         let rights = authorizations(acl).sorted().joined(separator: ",")
-        throw SignerError(code: "key_policy_invalid", message: "This key permits unattended access (rights=\(rights), trusted_apps=\(trustedCount), prompt_flags=\(selector.rawValue)). Create a new identity; do not select Always Allow in the Keychain prompt.")
+        throw SignerError(code: "key_policy_invalid", message: "Cannot verify the per-signature password policy (rights=\(rights), trusted_apps=\(trustedCount), prompt_flags=\(selector.rawValue)). Create a new identity; do not select Always Allow in the Keychain prompt.")
     }
 }
 
@@ -140,7 +153,7 @@ func makeACL() throws -> SecAccess {
             guard authorizations(acl) == [kSecACLAuthorizationChangeACL as String] else {
                 throw SignerError(code: "key_policy_invalid", message: "Unexpected default policy ownership")
             }
-            try check(SecACLSetContents(acl, [] as CFArray, keyLabel as CFString, .requirePassphase), "Cannot protect policy ownership")
+            try check(SecACLSetContents(acl, [] as CFArray, keyLabel as CFString, passwordPromptSelector), "Cannot protect policy ownership")
         } else {
             // SecACLRemove keeps a deleted entry in the in-memory Access map
             // until persistence. Clear its rights first so subsequent policy
@@ -150,7 +163,7 @@ func makeACL() throws -> SecAccess {
         }
     }
     var signing: SecACL?
-    try check(SecACLCreateWithSimpleContents(access, [] as CFArray, keyLabel as CFString, .requirePassphase, &signing), "Cannot create protected signing permission")
+    try check(SecACLCreateWithSimpleContents(access, [] as CFArray, keyLabel as CFString, passwordPromptSelector, &signing), "Cannot create protected signing permission")
     guard let signing = signing else { throw SignerError(code: "key_policy_invalid", message: "Missing signing policy") }
     try check(SecACLUpdateAuthorizations(signing, [kSecACLAuthorizationSign] as CFArray), "Cannot restrict signing permission")
     try verifyACL(access)
@@ -292,6 +305,11 @@ func status() -> [String: Any] {
 }
 
 func selfTest() throws -> [String: Any] {
+    guard requiredPasswordBit == 1,
+          passwordPromptSelector.rawValue == passwordPromptSelector.rawValue.byteSwapped,
+          passwordPromptSelector.contains(.requirePassphase) else {
+        throw SignerError(code: "self_test_failed", message: "Password selector must retain the required bit in either byte order")
+    }
     let access = try makeACL()
     try verifyACL(access)
     let activeRights = try aclList(access).map { authorizations($0) }.filter { !$0.isEmpty }
@@ -306,6 +324,18 @@ func selfTest() throws -> [String: Any] {
     }
     do { try verifyACL(access) } catch { rejectedPermissivePolicy = true }
     guard rejectedPermissivePolicy else { throw SignerError(code: "self_test_failed", message: "Permissive ACL was accepted") }
+    let invalidSelectors: [UInt16] = [requiredPasswordBit.byteSwapped,
+        requiredPasswordBit | 0x0002, requiredPasswordBit | SecKeychainPromptSelector.unsignedAct.rawValue]
+    for flags in invalidSelectors {
+        let invalidAccess = try makeACL()
+        for acl in try aclList(invalidAccess) where authorizations(acl).contains(kSecACLAuthorizationSign as String) {
+            try check(SecACLSetContents(acl, [] as CFArray, keyLabel as CFString,
+                SecKeychainPromptSelector(rawValue: flags)), "Cannot prepare invalid-selector check")
+        }
+        var rejected = false
+        do { try verifyACL(invalidAccess) } catch { rejected = true }
+        guard rejected else { throw SignerError(code: "self_test_failed", message: "Unsafe password selector was accepted: \(flags)") }
+    }
     var error: Unmanaged<CFError>?
     // This ephemeral key is used only inside this no-authentication diagnostic.
     // Neither its private key, public key, nor signature is returned to callers.
@@ -325,6 +355,8 @@ func selfTest() throws -> [String: Any] {
     if let error = error { _ = error.takeRetainedValue() }
     return ["ok": true, "method": method, "acl_policy_checked": true,
             "isolated_sign_and_owner": true,
+            "password_selector": Int(passwordPromptSelector.rawValue),
+            "swapped_only_and_unknown_selectors_rejected": true,
             "permissive_acl_rejected": true, "signature_roundtrip": true,
             "changed_challenge_rejected": true, "persistent_keys_created": false,
             "user_approval_tested": false]
@@ -419,6 +451,12 @@ func persistentPolicySelfTest() throws -> [String: Any] {
     let keyID = keyPrefix + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     _ = try createProtectedKey(keyID, in: keychain)
     _ = try lookup(keyID, in: keychain)
+    // Exercise encrypted persistence as well as the creator's in-memory ACL.
+    // Only this disposable test Keychain is locked; the user's store is untouched.
+    try check(SecKeychainLock(keychain), "Cannot lock private test Keychain for reload")
+    try password.withUnsafeBytes {
+        try check(SecKeychainUnlock(keychain, UInt32($0.count), $0.baseAddress, true), "Cannot reopen private test Keychain for reload")
+    }
     let task = Process()
     task.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
     task.arguments = ["--keychain-policy-probe", path, keyID]
@@ -448,6 +486,7 @@ func persistentPolicySelfTest() throws -> [String: Any] {
         throw SignerError(code: "self_test_failed", message: "Isolated test unexpectedly changed the default Keychain or search list")
     }
     return ["ok": true, "stored_acl_verified": true, "nonextractable_verified": true,
+            "keychain_lock_reload_checked": true,
             "fresh_process_unapproved_signing_rejected": true, "temporary_keychain_deleted": true,
             "user_keychain_configuration_unchanged": true, "user_approval_tested": false]
 }
