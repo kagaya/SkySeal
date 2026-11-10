@@ -64,6 +64,11 @@ SKYSEAL_FREEZE_REPORT="$diagnostic_root/engine-elf-staging.json" \
   "$python_exe" -m PyInstaller --clean --noconfirm \
   --distpath "$binary_root" --workpath "$build_root/pyinstaller" \
   "$script_dir/linux-runtime.spec"
+# Check the complete frozen runtime, including late bootstrap extensions,
+# before spending time compiling the GUI. The packaged app is audited again.
+"$python_exe" "$script_dir/audit-linux-runtime.py" \
+  --engine "$binary_root/desktop-engine-$rust_target" --maximum-glibc 2.35 \
+  --output "$diagnostic_root/engine-runtime-audit.json"
 "$python_exe" "$script_dir/smoke_engine.py" "$binary_root/desktop-engine-$rust_target"
 env -u SSL_CERT_FILE "$binary_root/desktop-engine-$rust_target" --tls-self-test > "$diagnostic_root/public-tls-self-test.json"
 "$python_exe" - "$diagnostic_root/public-tls-self-test.json" <<'PY'

@@ -29,12 +29,18 @@ a = Analysis(
                "opentimestamps.core.git"] if engine else []),
     noarchive=False,
 )
-a.binaries = stage_binaries(
-    a.binaries, Path(workpath) / "portable-elf",
+pyz = PYZ(a.pure)
+# PYZ adds bootstrap extensions such as _struct and zlib after Analysis. EXE
+# merges that dependency TOC too, so normalize every file TOC before packing.
+binary_count, data_count = len(a.binaries), len(a.datas)
+staged = stage_binaries(
+    [*a.binaries, *a.datas, *pyz.dependencies], Path(workpath) / "portable-elf",
     (Path(sys.base_prefix), repo_root, Path(workpath)),
     Path(os.environ["SKYSEAL_FREEZE_REPORT"]),
 )
-pyz = PYZ(a.pure)
+a.binaries = staged[:binary_count]
+a.datas = staged[binary_count:binary_count + data_count]
+pyz.dependencies = staged[binary_count + data_count:]
 exe = EXE(
     pyz, a.scripts, a.binaries, a.datas, [],
     name="desktop-engine-x86_64-unknown-linux-gnu" if engine else "linux-signing-worker",

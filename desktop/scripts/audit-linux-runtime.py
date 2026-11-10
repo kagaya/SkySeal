@@ -1,7 +1,7 @@
 """Audit packaged ELF architecture and required ABI versions without running it.
 
 The version-needs section matters: versions a bundled library *provides* must
-not be mistaken for versions it requires. Only the two trusted build outputs
+not be mistaken for versions it requires. Only the trusted build outputs
 are passed to ldd; extracted PyInstaller entries are inspected by readelf only.
 https://sourceware.org/binutils/docs/binutils/readelf.html
 """
@@ -108,7 +108,11 @@ def inspect(path: Path, component: str, maximum_glibc: str) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--app-dir", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--app-dir", type=Path,
+                        help="Directory containing skyseal-desktop and desktop-engine")
+    source.add_argument("--engine", type=Path,
+                        help="Audit a frozen engine before building the application")
     parser.add_argument("--maximum-glibc", default="2.35")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -125,10 +129,18 @@ def main() -> int:
         # Imported here so parser/header checks need no installed PyInstaller.
         from PyInstaller.archive.readers import CArchiveReader
 
-        app = args.app_dir.resolve(strict=True)
+        if args.app_dir is not None:
+            app = args.app_dir.resolve(strict=True)
+            engine = app / "desktop-engine"
+            executables = [("skyseal-desktop", app / "skyseal-desktop"),
+                           ("desktop-engine", engine)]
+        else:
+            # Resolve the parent only so a symlink at the executable itself is
+            # still rejected by the same regular-file checks as package mode.
+            engine = args.engine.parent.resolve(strict=True) / args.engine.name
+            executables = [(engine.name, engine)]
         dependencies = {}
-        for name in ("skyseal-desktop", "desktop-engine"):
-            executable = app / name
+        for name, executable in executables:
             if not executable.is_file() or executable.is_symlink() or not os.access(executable, os.X_OK):
                 raise RuntimeError(f"{name}: expected a regular executable in the package")
             records.append(inspect(executable, name, args.maximum_glibc))
@@ -138,7 +150,7 @@ def main() -> int:
             dependencies[name] = output.splitlines()
         report["host_dependency_resolution"] = dependencies
 
-        archive = CArchiveReader(str(app / "desktop-engine"))
+        archive = CArchiveReader(str(engine))
         embedded = 0
         with tempfile.TemporaryDirectory(prefix="skyseal-elf-audit-") as temporary:
             for number, name in enumerate(archive.toc):
@@ -148,7 +160,7 @@ def main() -> int:
                 # Never interpret archive member names as local filesystem paths.
                 extracted = Path(temporary) / f"component-{number}"
                 extracted.write_bytes(content)
-                records.append(inspect(extracted, "desktop-engine::" + name, args.maximum_glibc))
+                records.append(inspect(extracted, engine.name + "::" + name, args.maximum_glibc))
                 embedded += 1
         if not embedded:
             raise RuntimeError("No embedded Python ELF runtime was audited")
