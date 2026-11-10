@@ -67,6 +67,7 @@ jobs:
         with:
           workspaces: desktop/src-tauri -> target
           shared-key: macos-${{ matrix.rust_target }}
+          cache-on-failure: true
       - name: Build, audit and launch the native application
         shell: bash
         run: bash ./desktop/scripts/build-macos.sh

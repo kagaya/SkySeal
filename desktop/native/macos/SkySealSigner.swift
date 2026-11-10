@@ -132,7 +132,12 @@ func makeACL() throws -> SecAccess {
     guard let access = access else { throw SignerError(code: "key_policy_invalid", message: "Missing Keychain access object") }
     for acl in try aclList(access) {
         if authorizations(acl).contains(kSecACLAuthorizationChangeACL as String) {
-            try check(SecACLUpdateAuthorizations(acl, [kSecACLAuthorizationChangeACL] as CFArray), "Cannot restrict policy ownership")
+            // The owner authorization is immutable (errSecInvalidOwnerEdit),
+            // even when replacing it with the same CHANGE_ACL value. Require
+            // the exact owner right supplied by SecAccessCreate instead.
+            guard authorizations(acl) == [kSecACLAuthorizationChangeACL as String] else {
+                throw SignerError(code: "key_policy_invalid", message: "Unexpected default policy ownership")
+            }
             try check(SecACLSetContents(acl, [] as CFArray, keyLabel as CFString, .requirePassphase), "Cannot protect policy ownership")
         } else {
             try check(SecACLRemove(acl), "Cannot remove default key permissions")

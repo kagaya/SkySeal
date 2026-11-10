@@ -45,7 +45,7 @@ xcrun swiftc -O -target "$native_arch-apple-macos12.0" \
   -framework Foundation -framework Security \
   "$desktop_root/native/macos/SkySealSigner.swift" -o "$signer"
 codesign --force --sign - --identifier net.excyberlab.skyseal.desktop.signer "$signer"
-"$signer" --self-test > "$diagnostic_root/native-signer-self-test.json"
+"$signer" --self-test | tee "$diagnostic_root/native-signer-self-test.json"
 "$python_exe" - "$diagnostic_root/native-signer-self-test.json" <<'PY'
 import json,sys
 result=json.load(open(sys.argv[1]))
@@ -64,9 +64,26 @@ xcrun swiftc -O -D SKYSEAL_NATIVE_TESTS -target "$native_arch-apple-macos12.0" \
 codesign --force --sign - --identifier net.excyberlab.skyseal.desktop.signer-policy-test "$policy_probe"
 "$python_exe" - "$policy_probe" "$diagnostic_root/keychain-policy-self-test.json" <<'PY'
 import json,pathlib,subprocess,sys
-result=subprocess.run([sys.argv[1],'--keychain-policy-self-test'],capture_output=True,text=True,encoding='utf-8',timeout=90,check=True)
-payload=json.loads(result.stdout)
-pathlib.Path(sys.argv[2]).write_text(json.dumps(payload,indent=2)+'\n',encoding='utf-8')
+destination=pathlib.Path(sys.argv[2])
+try:
+ result=subprocess.run([sys.argv[1],'--keychain-policy-self-test'],capture_output=True,text=True,encoding='utf-8',timeout=90,check=False)
+except subprocess.TimeoutExpired as exc:
+ for suffix,content in (('stdout',exc.stdout),('stderr',exc.stderr)):
+  if isinstance(content,bytes):content=content.decode('utf-8',errors='replace')
+  destination.with_suffix('.'+suffix+'.txt').write_text(content or '',encoding='utf-8')
+ raise SystemExit('Keychain policy test exceeded 90 seconds; captured diagnostics were saved.')
+destination.with_suffix('.stdout.txt').write_text(result.stdout,encoding='utf-8')
+destination.with_suffix('.stderr.txt').write_text(result.stderr,encoding='utf-8')
+try:
+ payload=json.loads(result.stdout)
+except json.JSONDecodeError:
+ raise SystemExit(f'Keychain policy test exited {result.returncode} without valid JSON; captured diagnostics were saved.')
+destination.write_text(json.dumps(payload,indent=2)+'\n',encoding='utf-8')
+if result.returncode:
+ error=payload.get('error',{})
+ safe_error={key:error.get(key) for key in ('code','message')} if isinstance(error,dict) else str(error)[:2000]
+ print(json.dumps({'policy_test_exit_code':result.returncode,'error':safe_error}),file=sys.stderr)
+ raise SystemExit(result.returncode)
 assert payload.get('ok') is True
 PY
 

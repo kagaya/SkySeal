@@ -77,7 +77,7 @@ class MacOSAuthTests(unittest.TestCase):
         response = subprocess.CompletedProcess([], 0, b'{"ok":true,"result":{"available":true}}')
         with patch.object(m, "_helper_path", return_value=Path("/native/macos-signer")), patch.object(m.subprocess, "run", return_value=response) as call:
             self.assertEqual(m._invoke({"op": "status"}), {"available": True})
-        self.assertEqual(call.call_args.args[0], ["/native/macos-signer"])
+        self.assertEqual(call.call_args.args[0], [str(Path("/native/macos-signer"))])
         self.assertEqual(json.loads(call.call_args.kwargs["input"]), {"op": "status"})
         self.assertNotIn("shell", call.call_args.kwargs)
 
