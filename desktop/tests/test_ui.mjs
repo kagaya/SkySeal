@@ -10,7 +10,7 @@ import { JSDOM } from 'jsdom';
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const html = readFileSync(path.join(desktop, 'ui/index.html'), 'utf8');
 const script = readFileSync(path.join(desktop, 'ui/app.js'), 'utf8');
-const status = { configured: false, identity: null, platform: {available: true}, data_dir: 'C:\\SkySeal', orcid_client_id: '' };
+const status = { configured: false, identity: null, host_platform: 'win32', platform: {available: true}, data_dir: 'C:\\SkySeal', orcid_client_id: '' };
 const draft = {job_id:'a'.repeat(32), state:'prepared', created_at:'2026-11-10T12:00:00Z', entry_count:1,
   items:[{name:'<img src=x onerror=alert(1)>.txt',size:10,sha256:'a'.repeat(64)}], ots_state:'not_requested'};
 
@@ -29,7 +29,7 @@ async function setup(responder, options={}) {
     if(command==='choose_path') return options.paths?.[args.kind] || ['C:\\研究.txt'];
     const {op,params}=args.request;
     const result=await responder?.(op,params);
-    return result ?? {ok:true,result:op==='status'?status:op==='tls_status'?{callback_uri:'https://localhost:24731/callback',certificate_path:'local.pem'}:{}};
+    return result ?? {ok:true,result:op==='status'?status:op==='tls_status'?{callback_uri:'https://localhost:24731/callback',certificate_path:'local.pem'}:op==='trust_local_certificate'?{trusted:true,certificate_path:'local.pem'}:{}};
   }},event:{listen:async()=>()=>{}}};
   w.eval(script);
   await until(()=>w.document.getElementById('activity').hidden);
@@ -83,6 +83,53 @@ test('certificate trust is an explicit separate UI action',async()=>{
   t.$('trust-certificate').click(); t.$('confirm-cert').click();
   await until(()=>t.calls.some(c=>c.request?.op==='trust_local_certificate'));
   await until(()=>t.$('activity').hidden);
+  assert.equal(t.$('tls-state').textContent,'Windowsに登録済み');
+  t.dom.window.close();
+});
+test('macOS uses Keychain wording and keeps certificate trust explicit',async()=>{
+  const macStatus={...status,host_platform:'darwin',platform:{available:true,backend:'macos-keychain'}};
+  const t=await setup((op)=>op==='status'?success(macStatus):op==='tls_status'?success({certificate_path:'localhost.pem',trust_scope:'user Keychain / SSL / localhost'}):undefined);
+  t.w.document.querySelector('[data-page="settings"]').click();
+  await until(()=>t.$('tls-scope').textContent.includes('localhost'));
+  assert.match(t.$('native-state').textContent,/macOSキーチェーン/);
+  assert.match(t.$('trust-certificate').textContent,/キーチェーン/);
+  assert.match(t.$('key-storage-note').textContent,/ログインパスワードと異なる/);
+  assert.doesNotMatch(t.$('identity-description').textContent,/Windows|Touch ID/);
+  t.$('trust-certificate').click();
+  assert.match(t.$('certificate-trust-description').textContent,/現在のユーザー.*localhostのSSL/);
+  t.$('cancel-cert').click();
+  assert.equal(t.calls.some(c=>c.request?.op==='trust_local_certificate'),false);
+  t.dom.window.close();
+});
+test('cancelled macOS trust authentication is never reported as registered',async()=>{
+  const t=await setup((op)=>op==='status'?success({...status,host_platform:'darwin'}):op==='trust_local_certificate'?{ok:false,error:{message:'Keychain authentication cancelled'}}:undefined);
+  t.w.document.querySelector('[data-page="settings"]').click();
+  await until(()=>!t.$('trust-certificate').disabled);
+  t.$('trust-certificate').click(); t.$('confirm-cert').click();
+  await until(()=>!t.$('notice').hidden);
+  assert.match(t.$('notice-text').textContent,/cancelled/);
+  assert.doesNotMatch(t.$('tls-state').textContent,/登録済み/);
+  t.dom.window.close();
+});
+test('Mac local user-presence claims are not shown as independently verified',async()=>{
+  const t=await setup((op)=>op==='verify'?success({ok:true,signature_valid:true,user_verified:null,user_present:null,time_confirmed:false,
+    authentication_assurance:'local_user_presence_not_attested',profile:'skyseal-local-macos-keychain-v0.1-draft'}):undefined,
+    {paths:{evidence:['/tmp/evidence.zip']}});
+  t.w.document.querySelector('[data-page="verify"]').click();
+  t.$('pick-evidence').click(); await until(()=>!t.$('verify').disabled);
+  t.$('verify').click(); await until(()=>!t.$('verification-result').hidden);
+  assert.match(t.$('verification-result').textContent,/署名が一致/);
+  assert.match(t.$('verification-result').textContent,/Macの本人承認.*証拠単独では確認不可/);
+  assert.doesNotMatch(t.$('verification-result').textContent,/本人確認を伴う承認確認済み/);
+  t.dom.window.close();
+});
+test('an identity created for another platform cannot enable sealing',async()=>{
+  const t=await setup((op)=>op==='status'?success({...status,host_platform:'darwin',configured:true,identity:{identity_id:'https://orcid.org/0000-0003-3001-7690',signing_compatible:false}}):op==='prepare'?success(draft):undefined);
+  t.$('pick-files').click(); await until(()=>!t.$('prepare').disabled);
+  t.$('prepare').click(); await until(()=>!t.$('review-card').hidden);
+  assert.equal(t.$('seal').disabled,true);
+  assert.match(t.$('seal-disabled-note').textContent,/別のOS用/);
+  assert.equal(t.calls.some(c=>c.request?.op==='seal'),false);
   t.dom.window.close();
 });
 test('UI prepare and history run against real isolated engine processes',async()=>{

@@ -6,6 +6,10 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args == ["--tls-self-test"]:
+        from .network_trust import self_test
+        print(json.dumps(self_test(), sort_keys=True))
+        return 0
     if args == ["--ots-self-test"]:
         from .ots import self_test
         print(json.dumps(self_test(), sort_keys=True))
@@ -19,8 +23,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     from verifier.skyseal_verify import parse_json_bytes, VerificationError
     from .core import Engine, EngineError
+    from .network_trust import initialize_https_trust, NetworkTrustError
     engine = None
     try:
+        initialize_https_trust()
         raw = sys.stdin.buffer.readline(2 * 1024 * 1024 + 1)
         if len(raw) > 2 * 1024 * 1024:
             raise EngineError("invalid_request", "Request is too large")
@@ -35,8 +41,10 @@ def main(argv: list[str] | None = None) -> int:
             code, message = exc.code, str(exc)
         elif isinstance(exc, VerificationError):
             code, message = "verification_failed", str(exc)
-        elif type(exc).__name__ in {"WindowsAuthenticationError", "WindowsAuthError", "ORCIDError", "ORCIDAuthError", "TimestampError", "SkyWitnessError"}:
+        elif type(exc).__name__ in {"WindowsAuthenticationError", "WindowsAuthError", "MacOSAuthError", "ORCIDError", "ORCIDAuthError", "TimestampError", "SkyWitnessError"}:
             code, message = "operation_failed", str(exc)
+        elif isinstance(exc, NetworkTrustError):
+            code, message = "https_trust_unavailable", str(exc)
         elif isinstance(exc, (OSError, ValueError, TypeError)):
             code, message = "operation_failed", "The operation could not complete; check configuration, selected paths, and available storage"
         else:

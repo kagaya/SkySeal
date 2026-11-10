@@ -16,8 +16,10 @@ from pathlib import Path
 import queue
 import re
 import secrets
+import shlex
 import ssl
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -274,15 +276,25 @@ def ensure_certificate(data_dir: Path | str) -> dict:
         "thumbprint": cert.fingerprint(hashes.SHA1()).hex().upper(),
         "sha256": cert.fingerprint(hashes.SHA256()).hex(),
         "expires_at": cert.not_valid_after_utc.isoformat(), "callback_uri": CALLBACK_URI,
-        "trust_scope": "CurrentUser/Root", "trust_installation_is_explicit": True,
+        "trust_scope": ("user Keychain / SSL / localhost" if sys.platform == "darwin"
+                        else "CurrentUser/Root" if sys.platform == "win32" else "unsupported platform"),
+        "trust_installation_is_explicit": True,
     }
 
 
 def trust_certificate(data_dir: Path | str) -> dict:
-    """Explicit Windows UI action: trust only this certificate for the current user."""
-    if os.name != "nt":
-        raise ORCIDAuthError("Certificate trust installation is available only on Windows")
+    """Explicit UI action; never elevate or silently install machine-wide trust.
+
+    macOS requires its own authentication dialog even for per-user trust
+    settings. Its trust rule is limited to SSL for localhost. The callback's
+    exact certificate is checked using system trust after the change; passing
+    a custom root to the verifier would incorrectly bypass that check.
+    """
+    if sys.platform not in {"win32", "darwin"}:
+        raise ORCIDAuthError("Certificate trust installation is available only on Windows and macOS")
     info = ensure_certificate(data_dir)
+    if sys.platform == "darwin":
+        return _trust_certificate_macos(info)
     env = dict(os.environ)
     env["SKYSEAL_LOCAL_CERTIFICATE"] = info["certificate_der_path"]
     env["SKYSEAL_LOCAL_THUMBPRINT"] = info["thumbprint"]
@@ -298,6 +310,33 @@ def trust_certificate(data_dir: Path | str) -> dict:
     except (OSError, subprocess.SubprocessError) as exc:
         raise ORCIDAuthError("Could not trust the local certificate in the Windows current-user certificate store") from exc
     return {**info, "trusted": True}
+
+
+def _trust_certificate_macos(info: dict) -> dict:
+    security = "/usr/bin/security"
+    try:
+        current = subprocess.run([security, "default-keychain", "-d", "user"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True, timeout=10)
+        paths = shlex.split(current.stdout.strip())
+        if len(paths) != 1 or not Path(paths[0]).is_absolute():
+            raise ORCIDAuthError("Could not identify the current user's default Keychain")
+        keychain = Path(paths[0]).resolve()
+        # A system/admin Keychain is never selected even if made the user's
+        # default externally. User trust settings must stay in the user domain.
+        user_keychains = (Path.home() / "Library" / "Keychains").resolve()
+        if not keychain.is_relative_to(user_keychains) or keychain == user_keychains:
+            raise ORCIDAuthError("Select a default Keychain in your Library/Keychains folder before registering the local certificate")
+        subprocess.run([security, "add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-s", "localhost",
+            "-k", str(keychain), info["certificate_der_path"]],
+            stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=180)
+        subprocess.run([security, "verify-cert", "-p", "ssl", "-n", "localhost", "-L",
+            "-c", info["certificate_der_path"]],
+            stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=15)
+    except ORCIDAuthError:
+        raise
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise ORCIDAuthError("Could not confirm localhost certificate trust in your macOS Keychain; complete the macOS authentication dialog or retry") from exc
+    return {**info, "trust_scope": "user Keychain / SSL / localhost", "keychain_path": str(keychain), "trusted": True}
 
 
 def authorization_url(client_id: str, nonce: str, state: str) -> str:

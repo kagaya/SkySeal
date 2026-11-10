@@ -43,6 +43,19 @@ class TestSigner:
         return {"client_data_json": encode_base64url(client), "authenticator_data": encode_base64url(auth), "signature": encode_base64url(signature)}
 
 
+class TestMacSigner(TestSigner):
+    """Test-only boundary: a real ES256 signature, not a Keychain ceremony."""
+    PROFILE = proof.MAC_PROFILE
+
+    def sign(self, credential, challenge, rp_id, origin):
+        if self.cancel:
+            raise RuntimeError("cancelled by test user")
+        self.calls += 1
+        signature = self.key.sign(challenge, ec.ECDSA(hashes.SHA256()))
+        return {"method": proof.MAC_METHOD, "signature": encode_base64url(signature),
+                "key_tag": "private-mac-key-routing-tag"}
+
+
 class TestAuth:
     def login(self, client_id, nonce, data_dir):
         self.nonce, self.client_id = nonce, client_id
@@ -266,6 +279,76 @@ class EngineCase(unittest.TestCase):
             with self.engine.mutation():
                 with self.assertRaisesRegex(EngineError, "Another SkySeal"):
                     other.dispatch({"op": "prepare", "params": {"paths": [str(self.source)]}})
+        finally:
+            other.close()
+
+
+class MacEngineCase(unittest.TestCase):
+    new_engine = EngineCase.new_engine
+    enroll = EngineCase.enroll
+    sealed = EngineCase.sealed
+    tearDown = EngineCase.tearDown
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp.name)
+        self.signer, self.auth, self.timestamps = TestMacSigner(), TestAuth(), TestTimestamps()
+        self.engine = self.new_engine()
+        self.source = self.base / "研究 data.txt"
+        self.source.write_bytes(b"\x00exact research bytes\r\n")
+
+    test_cancel_cannot_create_a_seal = EngineCase.test_cancel_cannot_create_a_seal
+    test_restart_resume_never_resigns_and_immutable_bytes_remain = EngineCase.test_restart_resume_never_resigns_and_immutable_bytes_remain
+    test_power_loss_between_timestamp_and_manifest_is_recoverable = EngineCase.test_power_loss_between_timestamp_and_manifest_is_recoverable
+
+    def test_mac_roundtrip_does_not_claim_portable_user_verification(self):
+        job = self.sealed()
+        archive_path = self.base / "mac-proof.zip"
+        self.engine.export(job["job_id"], str(archive_path))
+        with zipfile.ZipFile(archive_path) as archive:
+            genesis = json.loads(archive.read("identity-genesis.json"))
+            seal = json.loads(archive.read("seal.skyseal.json"))
+            self.assertEqual(genesis["profile"], proof.MAC_PROFILE)
+            self.assertEqual(genesis["approval_method"], proof.MAC_METHOD)
+            self.assertNotIn("rp_id", genesis)
+            self.assertNotIn("origin", genesis)
+            self.assertEqual(set(seal["assertion"]), {"method", "signature"})
+            self.assertNotIn(b"private-mac-key-routing-tag", b"".join(archive.read(n) for n in archive.namelist()))
+        report = self.engine.verify(str(archive_path), str(self.source))
+        self.assertTrue(report["signature_valid"])
+        self.assertTrue(report["candidate_match"])
+        self.assertIsNone(report["user_verified"])
+        self.assertIsNone(report["user_present"])
+        self.assertEqual(report["authentication_assurance"], "local_user_presence_not_attested")
+
+    def test_windows_signer_host_can_independently_verify_mac_evidence(self):
+        job = self.sealed()
+        windows_signer = TestSigner()
+        other = Engine(self.base / "windows-verifier", signer=windows_signer,
+                       auth=self.auth, timestamps=self.timestamps)
+        try:
+            # No local identity is enrolled, and verification must not use the
+            # host's signer or the identity's private Keychain routing data.
+            report = other.verify(str(self.engine._jobdir(job["job_id"]) / "evidence"),
+                                  trusted_client_id="APP-TESTCLIENT12345")
+            self.assertEqual(report["profile"], proof.MAC_PROFILE)
+            self.assertTrue(report["signature_valid"])
+            self.assertEqual(windows_signer.calls, 0)
+        finally:
+            other.close()
+
+    def test_copied_identity_cannot_silently_change_platform_signer(self):
+        self.enroll()
+        job = self.engine.prepare([str(self.source)])
+        windows_signer = TestSigner()
+        other = Engine(self.base / "state", signer=windows_signer, auth=self.auth,
+                       witness=TestWitness(), timestamps=self.timestamps)
+        try:
+            self.assertFalse(other.status()["identity"]["signing_compatible"])
+            with self.assertRaisesRegex(EngineError, "different platform signer"):
+                other.seal(job["job_id"])
+            self.assertEqual(windows_signer.calls, 0)
+            self.assertEqual(other.get(job["job_id"])["state"], "prepared")
         finally:
             other.close()
 

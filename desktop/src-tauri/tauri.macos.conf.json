@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["app"],
+    "externalBin": ["binaries/desktop-engine", "binaries/macos-signer"],
+    "icon": ["icons/icon.icns", "icons/128x128.png"],
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "-",
+      "hardenedRuntime": false
+    }
+  }
+}

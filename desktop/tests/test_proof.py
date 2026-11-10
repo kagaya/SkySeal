@@ -58,5 +58,74 @@ class ProofChecks(unittest.TestCase):
             self.engine.verify(str(directory))
 
 
+class MacProofChecks(unittest.TestCase):
+    setUp = fixtures.MacEngineCase.setUp
+    tearDown = fixtures.MacEngineCase.tearDown
+    new_engine = fixtures.MacEngineCase.new_engine
+    enroll = fixtures.MacEngineCase.enroll
+    sealed = fixtures.MacEngineCase.sealed
+
+    def rewrite_manifest(self, directory, job):
+        atomic_write(directory / "manifest.json", proof.json_bytes(
+            proof.create_manifest(directory, job["job_id"], proof.MAC_PROFILE)))
+
+    def test_mac_payload_tamper_rejected_even_if_manifest_is_recomputed(self):
+        job = self.sealed()
+        directory = self.engine._jobdir(job["job_id"]) / "evidence"
+        seal = proof.read_json(directory / "seal.skyseal.json")
+        seal["payload"]["nonce"] = encode_base64url(b"q" * 32)
+        atomic_write(directory / "seal.skyseal.json", proof.json_bytes(seal))
+        self.rewrite_manifest(directory, job)
+        with self.assertRaisesRegex(VerificationError, "signature verification"):
+            self.engine.verify(str(directory))
+
+    def test_mac_unknown_approval_method_is_not_accepted(self):
+        job = self.sealed()
+        directory = self.engine._jobdir(job["job_id"]) / "evidence"
+        seal = proof.read_json(directory / "seal.skyseal.json")
+        seal["assertion"]["method"] = "software-key-with-password-screen"
+        atomic_write(directory / "seal.skyseal.json", proof.json_bytes(seal))
+        self.rewrite_manifest(directory, job)
+        with self.assertRaisesRegex(VerificationError, "approval method"):
+            self.engine.verify(str(directory))
+
+    def test_manifest_profile_cannot_reinterpret_mac_evidence_as_windows(self):
+        job = self.sealed()
+        directory = self.engine._jobdir(job["job_id"]) / "evidence"
+        # The file digests are valid, but the outer profile is not the signed
+        # genesis profile. Verification must not choose the host's algorithm.
+        atomic_write(directory / "manifest.json", proof.json_bytes(
+            proof.create_manifest(directory, job["job_id"], proof.PROFILE)))
+        with self.assertRaisesRegex(VerificationError, "profiles do not match"):
+            self.engine.verify(str(directory))
+
+    def test_orcid_nonce_is_bound_to_mac_approval_profile(self):
+        self.enroll()
+        identity = self.engine._identity()
+        genesis = identity["genesis"]
+        mac_nonce = proof.enrollment_nonce(genesis["public_key"], -7, genesis["enrollment_seed"], proof.MAC_PROFILE)
+        windows_nonce = proof.enrollment_nonce(genesis["public_key"], -7, genesis["enrollment_seed"], proof.PROFILE)
+        self.assertNotEqual(mac_nonce, windows_nonce)
+        self.assertEqual(mac_nonce, self.auth.nonce)
+        rewritten = dict(genesis)
+        rewritten.pop("approval_method")
+        rewritten.pop("key_namespace")
+        rewritten.update(profile=proof.PROFILE, schema=proof.GENESIS_SCHEMA,
+                         rp_id=proof.RP_ID, origin=proof.ORIGIN)
+        with self.assertRaisesRegex(VerificationError, "token binding"):
+            proof.verify_identity(rewritten, identity["activation"], self.auth.client_id, self.auth.verify_id_token)
+
+    def test_windows_nonce_and_challenge_bytes_remain_compatible(self):
+        key = {"kty": "EC", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+               "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}
+        seed = encode_base64url(b"n" * 32)
+        payload = {"profile": proof.PROFILE, "genesis_digest": "sha256:" + "a" * 64,
+                   "created_at": "2026-11-10T00:00:00Z", "nonce": seed}
+        self.assertEqual(proof.enrollment_nonce(key, -7, seed),
+                         "X5aqy5RjZPHsABmOmBr4Ww4qXbKIAEM3ppLK3LHujWk")
+        self.assertEqual(proof.challenge("identity", payload).hex(),
+                         "b902d5aadfd5986124bc0e680df0076cefc1ffb40ae20ec8593e59ad20e0fd0b")
+
+
 if __name__ == "__main__":
     unittest.main()

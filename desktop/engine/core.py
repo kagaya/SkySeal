@@ -37,6 +37,8 @@ def default_data_dir() -> Path:
     override = os.environ.get("SKYSEAL_DESKTOP_DATA_DIR")
     if override:
         return Path(override).expanduser().absolute()
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "SkySeal"
     base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".local" / "share")))
     return base / "SkySeal"
 
@@ -96,12 +98,18 @@ class Engine:
         self.db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self.db.commit()
         if signer is None:
-            from . import windows_auth
-            signer = windows_auth
+            if sys.platform == "darwin":
+                from . import macos_auth
+                signer = macos_auth
+            else:
+                from . import windows_auth
+                signer = windows_auth
         if auth is None:
             from . import orcid_auth
             auth = orcid_auth
         self.signer, self.auth = signer, auth
+        self.profile = getattr(signer, "PROFILE", proof.PROFILE)
+        proof.schema(self.profile, "genesis")
         self.witness = witness or JMAHimawariWitness()
         self.timestamps = timestamps or TimestampClient()
 
@@ -168,8 +176,10 @@ class Engine:
             raise EngineError("invalid_journal", "Invalid timestamp recovery target")
         old, new = record["old_manifest"], record["new_manifest"]
         for manifest in (old, new):
-            if not isinstance(manifest, dict) or set(manifest) != {"schema", "profile", "seal_id", "artifacts"} or manifest["schema"] != proof.MANIFEST_SCHEMA or manifest["seal_id"] != job_id or manifest["profile"] != proof.PROFILE:
+            if not isinstance(manifest, dict) or set(manifest) != {"schema", "profile", "seal_id", "artifacts"} or manifest["profile"] not in proof.SUPPORTED_PROFILES or manifest["schema"] != proof.schema(manifest["profile"], "manifest") or manifest["seal_id"] != job_id:
                 raise EngineError("invalid_journal", "Invalid timestamp recovery manifest")
+        if old["profile"] != new["profile"]:
+            raise EngineError("invalid_journal", "Timestamp recovery cannot change the evidence profile")
         before, after = dict(old["artifacts"]), dict(new["artifacts"])
         old_hash = before.pop(name, None)
         new_hash = after.pop(name, None)
@@ -208,10 +218,13 @@ class Engine:
     def status(self, **_) -> dict:
         identity = self._identity()
         return {"data_dir": str(self.root), "platform": self.signer.availability(),
+            "host_platform": sys.platform,
             "orcid_client_id": self._setting("orcid_client_id"),
-            "configured": bool(self._setting("orcid_client_id")), "profile": proof.PROFILE,
-            "identity": None if identity is None else {key: identity["genesis"][key]
-                for key in ("identity_id", "display_name", "created_at")}}
+            "configured": bool(self._setting("orcid_client_id")), "profile": self.profile,
+            "identity": None if identity is None else {**{key: identity["genesis"][key]
+                for key in ("identity_id", "display_name", "created_at")},
+                "profile": identity["genesis"]["profile"],
+                "signing_compatible": identity["genesis"]["profile"] == self.profile}}
 
     def configure(self, orcid_client_id: str = "", **_) -> dict:
         if not isinstance(orcid_client_id, str) or re.fullmatch(r"APP-[A-Z0-9]{8,80}", orcid_client_id) is None:
@@ -237,20 +250,24 @@ class Engine:
             raise EngineError("configuration_required", "Set the ORCID client ID before enrollment")
         credential = self.signer.register(proof.RP_ID, proof.ORIGIN, secrets.token_bytes(32), "SkySeal researcher")
         seed = encode_base64url(secrets.token_bytes(32))
-        nonce = proof.enrollment_nonce(credential["public_key"], credential["algorithm"], seed)
+        nonce = proof.enrollment_nonce(credential["public_key"], credential["algorithm"], seed, self.profile)
         result = self.auth.login(client_id, nonce, self.root)
         # Validate again at the engine boundary; do not trust callback fields.
         claims = self.auth.verify_id_token(result["id_token"], client_id, nonce)
-        genesis = {"schema": proof.GENESIS_SCHEMA, "profile": proof.PROFILE,
+        genesis = {"schema": proof.schema(self.profile, "genesis"), "profile": self.profile,
             "identity_id": "https://orcid.org/" + claims["sub"],
             "display_name": str(claims.get("name") or claims["sub"])[:200],
-            "created_at": utcnow(), "rp_id": proof.RP_ID, "origin": proof.ORIGIN,
+            "created_at": utcnow(),
             "algorithm": credential["algorithm"], "public_key": credential["public_key"],
             "enrollment_seed": seed, "orcid_client_id": client_id, "orcid_id_token": result["id_token"]}
-        payload = {"profile": proof.PROFILE, "genesis_digest": proof.object_digest(genesis),
+        if self.profile == proof.PROFILE:
+            genesis.update(rp_id=proof.RP_ID, origin=proof.ORIGIN)
+        else:
+            genesis.update(approval_method=proof.MAC_METHOD, key_namespace=proof.MAC_NAMESPACE)
+        payload = {"profile": self.profile, "genesis_digest": proof.object_digest(genesis),
             "created_at": utcnow(), "nonce": encode_base64url(secrets.token_bytes(32))}
-        activation = {"schema": proof.ACTIVATION_SCHEMA, "payload": payload,
-            "assertion": proof.public_assertion(self.signer.sign(credential, proof.challenge("identity", payload), proof.RP_ID, proof.ORIGIN))}
+        activation = {"schema": proof.schema(self.profile, "activation"), "payload": payload,
+            "assertion": proof.public_assertion(self.signer.sign(credential, proof.challenge("identity", payload), proof.RP_ID, proof.ORIGIN), self.profile)}
         proof.verify_identity(genesis, activation, client_id, self.auth.verify_id_token)
         atomic_write(self.root / "identity" / "private.json", proof.json_bytes({
             "credential": credential, "genesis": genesis, "activation": activation}))
@@ -370,6 +387,8 @@ class Engine:
         identity = self._identity()
         if not identity:
             raise EngineError("identity_required", "Enroll an ORCID-bound local identity first")
+        if identity["genesis"].get("profile") != self.profile:
+            raise EngineError("incompatible_identity", "This identity belongs to a different platform signer; enroll a native identity in a separate data directory")
         # Recheck snapshots against the already shown preview before signing.
         for item in record["items"]:
             path = folder / "originals" / item["snapshot"]
@@ -384,17 +403,17 @@ class Engine:
         staging = Path(tempfile.mkdtemp(prefix=".evidence-", dir=folder))
         try:
             witness = self.witness.capture()
-            payload = {"profile": proof.PROFILE, "seal_id": job_id, "subject_digest": proof.digest(hashes_data),
+            payload = {"profile": self.profile, "seal_id": job_id, "subject_digest": proof.digest(hashes_data),
                 "identity_id": identity["genesis"]["identity_id"], "identity_digest": proof.object_digest(identity["activation"]),
                 "created_at": utcnow(), "nonce": encode_base64url(secrets.token_bytes(32)), "sky_witness": witness.metadata}
-            assertion = proof.public_assertion(self.signer.sign(identity["credential"], proof.challenge("seal", payload), proof.RP_ID, proof.ORIGIN))
+            assertion = proof.public_assertion(self.signer.sign(identity["credential"], proof.challenge("seal", payload), proof.RP_ID, proof.ORIGIN), self.profile)
             proof.verify_assertion(assertion, proof.challenge("seal", payload), identity["genesis"])
-            files = {"hashes.txt": hashes_data, "seal.skyseal.json": proof.json_bytes({"schema": proof.SEAL_SCHEMA, "payload": payload, "assertion": assertion}),
+            files = {"hashes.txt": hashes_data, "seal.skyseal.json": proof.json_bytes({"schema": proof.schema(self.profile, "seal"), "payload": payload, "assertion": assertion}),
                 "identity-genesis.json": proof.json_bytes(identity["genesis"]), "identity-activation.json": proof.json_bytes(identity["activation"]),
                 "sky-witness.json": proof.json_bytes(witness.metadata), "sky-witness.jpg": witness.image}
             for name, content in files.items():
                 atomic_write(staging / name, content)
-            atomic_write(staging / "manifest.json", proof.json_bytes(proof.create_manifest(staging, job_id)))
+            atomic_write(staging / "manifest.json", proof.json_bytes(proof.create_manifest(staging, job_id, self.profile)))
             # Revalidate the cryptographic layers before committing this directory.
             proof.verify_directory(staging, client_id=self._setting("orcid_client_id"), token_verifier=self.auth.verify_id_token)
             os.rename(staging, folder / "evidence")
@@ -524,7 +543,7 @@ class Engine:
 
     def _verify_directory(self, path: Path, candidate, trusted_rp_id, trusted_origin, trusted_client_id=None):
         manifest = proof.read_json(path / "manifest.json")
-        if manifest.get("schema") == proof.MANIFEST_SCHEMA:
+        if manifest.get("schema") in proof.MANIFEST_SCHEMAS:
             return proof.verify_directory(path, client_id=trusted_client_id or self._setting("orcid_client_id"),
                 token_verifier=self.auth.verify_id_token, ots_verify=self.timestamps.verify,
                 candidate=Path(candidate) if candidate else None)
