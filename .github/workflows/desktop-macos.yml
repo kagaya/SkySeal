@@ -44,7 +44,7 @@ jobs:
             rust_target: aarch64-apple-darwin
     env:
       PYTHONUTF8: '1'
-      MACOSX_DEPLOYMENT_TARGET: '12.0'
+      MACOSX_DEPLOYMENT_TARGET: '12.3'
       CARGO_TERM_COLOR: always
       SKYSEAL_EXPECTED_ARCH: ${{ matrix.native_arch }}
     steps:

@@ -21,7 +21,7 @@ if [[ -n "${SKYSEAL_EXPECTED_ARCH:-}" && "$native_arch" != "$SKYSEAL_EXPECTED_AR
   exit 1
 fi
 
-export MACOSX_DEPLOYMENT_TARGET=12.0
+export MACOSX_DEPLOYMENT_TARGET=12.3
 export PYTHONUTF8=1
 build_root="$desktop_root/.build/macos-$rust_target"
 binary_root="$desktop_root/src-tauri/binaries"
@@ -40,7 +40,7 @@ export SKYSEAL_TEST_PYTHON="$python_exe"
 "$python_exe" -m pip install -r "$desktop_root/requirements-build.txt"
 
 signer="$binary_root/macos-signer-$rust_target"
-xcrun swiftc -O -target "$native_arch-apple-macos12.0" \
+xcrun swiftc -O -target "$native_arch-apple-macos12.3" \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   -framework Foundation -framework Security \
   "$desktop_root/native/macos/SkySealSigner.swift" -o "$signer"
@@ -57,7 +57,7 @@ PY
 # or distributed; its isolated temporary keychain tests enforced denial when UI
 # is disabled in a fresh process, without changing the user's login keychain.
 policy_probe="$build_root/macos-signer-policy-test"
-xcrun swiftc -O -D SKYSEAL_NATIVE_TESTS -target "$native_arch-apple-macos12.0" \
+xcrun swiftc -O -D SKYSEAL_NATIVE_TESTS -target "$native_arch-apple-macos12.3" \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   -framework Foundation -framework Security \
   "$desktop_root/native/macos/SkySealSigner.swift" -o "$policy_probe"
@@ -125,7 +125,7 @@ test -x "$app/Contents/MacOS/macos-signer"
 codesign --verify --deep --strict --verbose=2 "$app"
 codesign --display --verbose=4 "$app" 2> "$diagnostic_root/app-signature.txt"
 "$python_exe" "$script_dir/audit-macos-runtime.py" \
-  --app "$app" --architecture "$native_arch" --minimum 12.0 \
+  --app "$app" --architecture "$native_arch" --minimum 12.3 \
   --output "$diagnostic_root/runtime-audit.json"
 "$python_exe" "$script_dir/smoke-installed-macos.py" "$app" \
   --diagnostics "$diagnostic_root/installed-smoke"
@@ -151,7 +151,7 @@ assert all(path.is_file() for path in files)
 (root/'SHA256SUMS.txt').write_text(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in files),encoding='utf-8')
 report={
  'target':sys.argv[2], 'native_architecture':platform.machine(),
- 'minimum_macos':'12.0', 'tested_macos':platform.mac_ver()[0],
+ 'minimum_macos':'12.3', 'tested_macos':platform.mac_ver()[0],
  'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
  'signature':'ad-hoc', 'developer_id_signed':False, 'notarized':False,
  'runtime_audit':json.loads(pathlib.Path(sys.argv[3]).read_text()),

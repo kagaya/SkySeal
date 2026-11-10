@@ -93,7 +93,7 @@ def main() -> int:
         "declared_minimum_macos": args.minimum,
         "maximum_embedded_minimum": max((item["minimum_macos"] for item in records), key=version),
         "components": records,
-        "limit": "Load-command audit; application behavior on macOS 12 still requires a macOS 12 device.",
+        "limit": f"Load-command audit; application behavior on macOS {args.minimum} still requires a matching device.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

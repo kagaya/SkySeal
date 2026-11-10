@@ -9,7 +9,7 @@ Intel Mac と Apple Silicon Mac で、ファイルの保存コピー、ハッシ
 | Intel | Intel プロセッサーの Mac（x86_64） | ネイティブ実行 |
 | Apple Silicon | M シリーズのチップを搭載した Mac（arm64） | ネイティブ実行、Rosetta 不要 |
 
-ビルドの最低対象 OS は macOS 12.0 です。構成する実行ファイルと同梱ライブラリーのアーキテクチャー・最低 OS バージョンをビルド時に検査します。自動起動試験は CI の macOS 15 環境で実行し、macOS 12 の実機試験とは区別します。
+最低対応 OS は macOS 12.3 です。標準の WebKit で、証明書登録の確認ダイアログなどに必要な画面機能が利用できる版を基準にしています。構成する実行ファイルと同梱ライブラリーのアーキテクチャー・最低 OS バージョンもビルド時に検査します。自動起動試験は CI の macOS 15 環境で実行し、macOS 12.3 の実機試験とは区別します。
 
 「この Mac について」に「プロセッサ Intel」とあれば Intel 用、「チップ Apple M…」とあれば Apple Silicon 用を選んでください。利用者による Python、Node.js、Rust、Homebrew の導入は不要です。
 
