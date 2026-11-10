@@ -36,6 +36,7 @@ export TMPDIR="$("$python_exe" -c 'import pathlib,tempfile; print(pathlib.Path(t
 export SKYSEAL_TEST_PYTHON="$python_exe"
 "$python_exe" -m pip install -r "$desktop_root/requirements-build.txt"
 "$python_exe" -m unittest discover -s desktop/tests -v
+"$python_exe" "$script_dir/test-linux-freezer.py"
 
 # Exercise real native password dialogs only in an isolated CI X11 display.
 # This harness is not shipped and cannot inject credentials into the app.
@@ -47,31 +48,22 @@ dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' \
 # Freeze only the CI adapter harness as a separate worker. It is never copied
 # into either package. This checks the real Pinentry child under PyInstaller's
 # modified shared-library environment, without a production credential hook.
-"$python_exe" -m PyInstaller --clean --noconfirm --onefile --console \
-  --name linux-signing-worker \
+SKYSEAL_FREEZE_KIND=signing-worker \
+SKYSEAL_FREEZE_REPORT="$diagnostic_root/frozen-worker-elf-staging.json" \
+  "$python_exe" -m PyInstaller --clean --noconfirm \
   --distpath "$build_root/ci-worker" --workpath "$build_root/ci-worker-build" \
-  --specpath "$build_root" --paths "$repo_root" \
-  "$script_dir/smoke-linux-signing.py"
+  "$script_dir/linux-runtime.spec"
 dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' \
   bash "$script_dir/linux-test-session.sh" \
   "$python_exe" "$script_dir/smoke-linux-signing.py" \
   --worker-executable "$build_root/ci-worker/linux-signing-worker" \
   --diagnostics "$diagnostic_root/frozen-native-signing"
 
-"$python_exe" -m PyInstaller --clean --noconfirm --onefile --console \
-  --name "desktop-engine-$rust_target" \
+SKYSEAL_FREEZE_KIND=engine \
+SKYSEAL_FREEZE_REPORT="$diagnostic_root/engine-elf-staging.json" \
+  "$python_exe" -m PyInstaller --clean --noconfirm \
   --distpath "$binary_root" --workpath "$build_root/pyinstaller" \
-  --specpath "$build_root" --paths "$repo_root" \
-  --hidden-import opentimestamps.core.timestamp \
-  --hidden-import opentimestamps.core.notary \
-  --hidden-import opentimestamps.core.op \
-  --hidden-import opentimestamps.core.serialize \
-  --hidden-import bitcoin.core \
-  --exclude-module otsclient --exclude-module bitcoin.wallet \
-  --exclude-module bitcoin.rpc --exclude-module bitcoin.core.key \
-  --exclude-module opentimestamps.core.git \
-  --copy-metadata opentimestamps --copy-metadata python-bitcoinlib \
-  --copy-metadata cryptography --collect-data certifi "$script_dir/engine_entry.py"
+  "$script_dir/linux-runtime.spec"
 "$python_exe" "$script_dir/smoke_engine.py" "$binary_root/desktop-engine-$rust_target"
 env -u SSL_CERT_FILE "$binary_root/desktop-engine-$rust_target" --tls-self-test > "$diagnostic_root/public-tls-self-test.json"
 "$python_exe" - "$diagnostic_root/public-tls-self-test.json" <<'PY'
@@ -130,6 +122,7 @@ report={
  'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
  'distribution_signature':'unsigned-development-package',
  'runtime_audit':json.loads((diagnostics/'runtime-audit.json').read_text()),
+ 'runtime_elf_staging':json.loads((diagnostics/'engine-elf-staging.json').read_text()),
  'portable_application_smoke':'passed',
  'native_pinentry_adapter_test':json.loads((diagnostics/'native-signing/result.json').read_text()),
  'frozen_native_pinentry_adapter_test':json.loads((diagnostics/'frozen-native-signing/result.json').read_text()),
