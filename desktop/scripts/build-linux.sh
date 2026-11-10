@@ -85,12 +85,40 @@ npm test
 npm run build -- --target "$rust_target" --bundles deb
 
 release_root="$desktop_root/src-tauri/target/$rust_target/release"
+version="$("$python_exe" -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')"
+artifact_base="SkySeal_${version}_Linux_x86_64_development"
+"$python_exe" - "$release_root/bundle/deb" "$distribution_root/$artifact_base.deb" <<'PY_PACKAGE'
+import pathlib,shutil,sys
+packages=list(pathlib.Path(sys.argv[1]).glob('*.deb'))
+assert len(packages)==1, f'Expected exactly one .deb, found {len(packages)}'
+shutil.copyfile(packages[0],sys.argv[2])
+PY_PACKAGE
+dpkg-deb --info "$distribution_root/$artifact_base.deb" > "$diagnostic_root/debian-package-info.txt"
+
+# Tauri patches the Debian bundle marker, then restores the release-tree binary.
+# Both distributions must use the final packaged bytes, which we audit and launch
+# after copying to a fresh directory. Extraction executes no maintainer scripts.
 portable_root="$build_root/portable/SkySeal"
-mkdir -p "$portable_root"
-install -m 755 "$release_root/skyseal-desktop" "$portable_root/skyseal-desktop"
-install -m 755 "$binary_root/desktop-engine-$rust_target" "$portable_root/desktop-engine"
+"$python_exe" - "$distribution_root/$artifact_base.deb" \
+  "$binary_root/desktop-engine-$rust_target" "$portable_root" <<'PY_PORTABLE'
+import hashlib,pathlib,shutil,subprocess,sys,tempfile
+package,frozen_engine,portable=map(pathlib.Path,sys.argv[1:])
+portable.mkdir(parents=True,exist_ok=True)
+with tempfile.TemporaryDirectory(prefix='skyseal-packaged-binaries-') as temporary:
+    root=pathlib.Path(temporary)
+    subprocess.run(['dpkg-deb','-x',str(package),str(root)],check=True)
+    for name in ('skyseal-desktop','desktop-engine'):
+        binary=root/'usr/bin'/name
+        assert binary.is_file() and not binary.is_symlink() and binary.stat().st_mode & 0o111, name
+        if name=='desktop-engine':
+            assert hashlib.sha256(binary.read_bytes()).digest()==hashlib.sha256(frozen_engine.read_bytes()).digest(), 'The packaged engine differs from the audited frozen engine'
+        shutil.copy2(binary,portable/name)
+PY_PORTABLE
 cp "$desktop_root/README.linux.ja.md" "$portable_root/README.linux.ja.md"
 cp "$desktop_root/README.ja.md" "$portable_root/README.ja.md"
+"$python_exe" "$script_dir/audit-linux-package.py" \
+  "$distribution_root/$artifact_base.deb" --version "$version" \
+  --portable "$portable_root" --output "$diagnostic_root/debian-package-audit.json"
 "$python_exe" "$script_dir/audit-linux-runtime.py" \
   --app-dir "$portable_root" --maximum-glibc 2.35 \
   --output "$diagnostic_root/runtime-audit.json"
@@ -99,18 +127,6 @@ dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' \
   "$python_exe" "$script_dir/smoke-installed-linux.py" \
   --app-dir "$portable_root" --diagnostics "$diagnostic_root/portable-smoke"
 
-version="$("$python_exe" -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')"
-artifact_base="SkySeal_${version}_Linux_x86_64_development"
-"$python_exe" - "$release_root/bundle/deb" "$distribution_root/$artifact_base.deb" <<'PY'
-import pathlib,shutil,sys
-packages=list(pathlib.Path(sys.argv[1]).glob('*.deb'))
-assert len(packages)==1, f'Expected exactly one .deb, found {len(packages)}'
-shutil.copyfile(packages[0],sys.argv[2])
-PY
-dpkg-deb --info "$distribution_root/$artifact_base.deb" > "$diagnostic_root/debian-package-info.txt"
-"$python_exe" "$script_dir/audit-linux-package.py" \
-  "$distribution_root/$artifact_base.deb" --version "$version" \
-  --portable "$portable_root" --output "$diagnostic_root/debian-package-audit.json"
 tar --sort=name --owner=0 --group=0 --numeric-owner -czf \
   "$distribution_root/$artifact_base.tar.gz" -C "$build_root/portable" SkySeal
 cp "$desktop_root/README.linux.ja.md" "$distribution_root/README.linux.ja.md"
@@ -129,6 +145,8 @@ report={
  'runtime_audit':json.loads((diagnostics/'runtime-audit.json').read_text()),
  'runtime_elf_staging':json.loads((diagnostics/'engine-elf-staging.json').read_text()),
  'portable_application_smoke':'passed',
+ 'portable_binary_source':'executables extracted from the audited Debian package',
+ 'packaged_engine_matches_original_frozen_engine':True,
  'native_pinentry_adapter_test':json.loads((diagnostics/'native-signing/result.json').read_text()),
  'frozen_native_pinentry_adapter_test':json.loads((diagnostics/'frozen-native-signing/result.json').read_text()),
  'installed_debian_package_tests':'see separate Ubuntu 22.04 and 24.04 CI jobs',
