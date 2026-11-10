@@ -217,10 +217,13 @@ func createProtectedKey(_ keyID: String, in keychain: SecKeychain) throws -> Sec
     let access = try makeACL()
     let privateAttributes: [String: Any] = [kSecAttrIsPermanent as String: true,
         kSecAttrApplicationTag as String: try keyTag(keyID),
-        kSecAttrLabel as String: keyLabel, kSecAttrIsExtractable as String: false,
-        kSecAttrIsSensitive as String: true, kSecAttrAccess as String: access]
+        kSecAttrLabel as String: keyLabel]
+    // The legacy CDSA generator reads Access and IsExtractable from the outer
+    // dictionary, unlike persistence/tag fields that accept private overrides.
+    // Public keys remain extractable; this flag restricts the private key.
     let attributes: [String: Any] = [kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
         kSecAttrKeySizeInBits as String: 256, kSecPrivateKeyAttrs as String: privateAttributes,
+        kSecAttrAccess as String: access, kSecAttrIsExtractable as String: false,
         kSecUseKeychain as String: keychain, kSecUseDataProtectionKeychain as String: false]
     var error: Unmanaged<CFError>?
     guard let key = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
