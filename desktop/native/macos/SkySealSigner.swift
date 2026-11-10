@@ -218,11 +218,17 @@ func createProtectedKey(_ keyID: String, in keychain: SecKeychain) throws -> Sec
     let privateAttributes: [String: Any] = [kSecAttrIsPermanent as String: true,
         kSecAttrApplicationTag as String: try keyTag(keyID),
         kSecAttrLabel as String: keyLabel]
+    // A later process resolves SecKeyCopyPublicKey through the matching public
+    // Keychain item; the generator's in-memory public-key cache does not persist.
+    let publicAttributes: [String: Any] = [kSecAttrIsPermanent as String: true,
+        kSecAttrApplicationTag as String: try keyTag(keyID),
+        kSecAttrLabel as String: keyLabel + " (public)"]
     // The legacy CDSA generator reads Access and IsExtractable from the outer
     // dictionary, unlike persistence/tag fields that accept private overrides.
     // Public keys remain extractable; this flag restricts the private key.
     let attributes: [String: Any] = [kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
         kSecAttrKeySizeInBits as String: 256, kSecPrivateKeyAttrs as String: privateAttributes,
+        kSecPublicKeyAttrs as String: publicAttributes,
         kSecAttrAccess as String: access, kSecAttrIsExtractable as String: false,
         kSecUseKeychain as String: keychain, kSecUseDataProtectionKeychain as String: false]
     var error: Unmanaged<CFError>?

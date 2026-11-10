@@ -142,6 +142,7 @@ ln -sfn /Applications "$image_stage/Applications"
 hdiutil create -ov -fs HFS+ -volname SkySeal -format UDZO \
   -srcfolder "$image_stage" "$distribution_root/$artifact_base.dmg"
 cp "$desktop_root/README.macos.ja.md" "$distribution_root/README.macos.ja.md"
+cp "$desktop_root/README.ja.md" "$distribution_root/README.ja.md"
 "$python_exe" - "$distribution_root" "$rust_target" "$diagnostic_root/runtime-audit.json" "$artifact_base" <<'PY'
 import hashlib,json,pathlib,platform,subprocess,sys
 root=pathlib.Path(sys.argv[1])
