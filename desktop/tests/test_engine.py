@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import zipfile
+from types import SimpleNamespace
 from unittest import mock
 
 from cryptography.hazmat.primitives import hashes
@@ -115,6 +116,38 @@ class EngineCase(unittest.TestCase):
         self.source.write_bytes(b"edited original")
         snapshot = self.engine._jobdir(job["job_id"]) / "originals" / job["items"][0]["snapshot"]
         self.assertEqual(snapshot.read_bytes(), b"\x00exact research bytes\r\n")
+
+    def test_stable_file_allows_path_and_handle_timestamp_precision_difference(self):
+        info = self.source.stat()
+        path_info = SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino, st_size=info.st_size,
+            st_mtime_ns=1234567890123456789, st_ctime_ns=1234567890123456789)
+        handle_info = SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino, st_size=info.st_size,
+            st_mtime_ns=1234567890000000000, st_ctime_ns=1234567890000000000)
+        destination = self.base / "precision-copy.bin"
+        with mock.patch("desktop.engine.core._safe_source", return_value=path_info), \
+                mock.patch("desktop.engine.core.os.fstat", return_value=handle_info):
+            size, digest = self.engine._copy_snapshot(self.source, destination)
+        self.assertEqual(size, info.st_size)
+        self.assertEqual(digest, hashlib.sha256(self.source.read_bytes()).hexdigest())
+        self.assertEqual(destination.read_bytes(), self.source.read_bytes())
+
+    def test_handle_timestamp_change_still_rejects_snapshot(self):
+        info = self.source.stat()
+        def handle_info(timestamp):
+            return SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino, st_size=info.st_size,
+                st_mtime_ns=timestamp, st_ctime_ns=timestamp)
+        with mock.patch("desktop.engine.core.os.fstat", side_effect=[handle_info(100), handle_info(200)]):
+            with self.assertRaisesRegex(EngineError, "changed during copying"):
+                self.engine._copy_snapshot(self.source, self.base / "changed-copy.bin")
+
+    def test_path_timestamp_change_still_rejects_snapshot(self):
+        info = self.source.stat()
+        def path_info(timestamp):
+            return SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino, st_size=info.st_size,
+                st_mtime_ns=timestamp, st_ctime_ns=timestamp)
+        with mock.patch("desktop.engine.core._safe_source", side_effect=[path_info(100), path_info(200)]):
+            with self.assertRaisesRegex(EngineError, "changed during copying"):
+                self.engine._copy_snapshot(self.source, self.base / "changed-path-copy.bin")
 
     def test_full_roundtrip_pending_is_not_confirmed_and_export_is_private(self):
         job = self.sealed()

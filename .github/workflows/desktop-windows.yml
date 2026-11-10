@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-windows-${{ github.ref }}
+  group: desktop-windows-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:

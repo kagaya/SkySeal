@@ -296,7 +296,7 @@ class Engine:
         size = 0
         with os.fdopen(descriptor, "rb") as original, target.open("xb") as output:
             opened = os.fstat(original.fileno())
-            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            if (opened.st_dev, opened.st_ino, opened.st_size) != (before.st_dev, before.st_ino, before.st_size):
                 raise EngineError("source_changed", "A selected file changed while opening it")
             for chunk in iter(lambda: original.read(1024 * 1024), b""):
                 output.write(chunk)
@@ -307,7 +307,11 @@ class Engine:
             after = os.fstat(original.fileno())
         final = _safe_source(source)
         signature = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-        if signature(before) != signature(after) or signature(before) != signature(final) or size != before.st_size:
+        # Windows path stat and descriptor fstat can report different timestamp
+        # precision. Compare each observation channel with itself, while binding
+        # the channels by file identity/size above. Changes within either channel
+        # still invalidate the snapshot.
+        if signature(opened) != signature(after) or signature(before) != signature(final) or size != before.st_size:
             raise EngineError("source_changed", "A selected file changed during copying; prepare a fresh snapshot")
         return size, sha.hexdigest()
 
@@ -478,7 +482,8 @@ class Engine:
             with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as archive:
                 for name in sorted(names):
                     archive.write(directory / name, name)
-            with open(temporary, "rb") as stream:
+            # Windows _commit/fsync requires a writable descriptor.
+            with open(temporary, "r+b") as stream:
                 os.fsync(stream.fileno())
             # Publish the completed archive atomically without replacing an
             # existing destination. No partial final ZIP is ever visible.
