@@ -4,6 +4,15 @@ SkySeal の処理を Windows PC 内で実行するデスクトップアプリで
 
 この版の新しい証拠形式は **`skyseal-local-desktop-v0.1-draft`** です。既存 Web サービス用の資格情報をそのまま移す方式ではありません。Windows 用インストーラーをビルドする設定は含まれますが、配布用コード署名と Windows Hello／ORCID の実機受け入れ試験は別の完了条件です。
 
+## インストール
+
+1. [Windows ビルドの実行一覧](https://github.com/kagaya/SkySeal/actions/workflows/desktop-windows.yml)で、対象のコミットの成功した実行を開きます。
+2. 成果物 `SkySeal-Windows-x64-development-unsigned` をダウンロードして ZIP を展開します。GitHub へのログインが必要です。
+3. ZIP 内の `SkySeal_0.1.0_x64-setup.exe` を実行し、現在の Windows ユーザー用にインストールします。開発用の Python、Node.js、Rust は不要です。
+4. SkySeal を起動し、以下の「最初の設定」を行います。本人登録前でもファイルの保存コピーと履歴の確認は利用できます。
+
+この開発版インストーラーは未署名のため、Windows に発行元未確認の警告が表示される場合があります。成果物には照合用の `SHA256SUMS.txt` も含めます。
+
 ## 利用する外部サービス
 
 | 接続先 | 用途 | 送信する情報 |
@@ -94,7 +103,9 @@ npm run dev
 `.github/workflows/desktop-windows.yml` は、次の二つを分離して実行します。
 
 - Ubuntu：既存の verifier／service／CLI／Drive agent とデスクトップの回帰試験。既存テストには POSIX の権限や bash に依存するものがあります。
-- Windows x64：デスクトップ用テスト、同梱エンジンのスモークテスト、NSIS インストーラー作成。
+- Windows x64：デスクトップ用テスト、同梱エンジンのスモークテスト、NSIS インストーラー作成、実際のインストールと GUI 起動。
+
+インストール後の試験は専用の空の保存領域を使い、GUI のウィンドウと、画面から同梱エンジンを呼び出した結果のデータベース作成を検査します。UI Automation が利用できる環境では、動的な日本語の初期状態表示と操作ボタンも検査します。本人登録や証明書の信頼登録は自動実行しません。診断結果は別の成果物 `SkySeal-Windows-installed-smoke` に保存します。
 
 GitHub Actions の成果物 `SkySeal-Windows-x64-development-unsigned` にインストーラーと SHA-256 一覧を保存します。公開リリースへの自動掲載は行いません。現在の設定は配布用コード署名を行いません。
 
