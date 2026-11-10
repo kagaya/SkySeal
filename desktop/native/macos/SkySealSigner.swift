@@ -25,7 +25,8 @@ let maximumRequestBytes = 16384
 // is reserved and has no consumer in the audited source; this does not enable
 // the unsigned/invalid-client overrides (0x10, 0x20, 0x40, 0x80). This is a narrow
 // legacy compatibility workaround, not permission to normalize a swapped-only
-// value: every stored policy must still contain the real 0x0001 bit.
+// value: every stored policy must be exactly 0x0101 and contain the real 0x0001
+// bit. A read-back 0x0001 alone is also ambiguous under the same byte-order bug.
 // https://github.com/apple-oss-distributions/Security/blob/db15acbe6a7f257a859ad9a3bb86097bfe0679d9/securityd/src/acl_keychain.cpp
 // https://github.com/apple-oss-distributions/Security/blob/db15acbe6a7f257a859ad9a3bb86097bfe0679d9/OSX/libsecurity_keychain/lib/SecACL.h
 let requiredPasswordBit = SecKeychainPromptSelector.requirePassphase.rawValue
@@ -100,7 +101,7 @@ func requirePrompt(_ acl: SecACL) throws {
     try check(SecACLCopyContents(acl, &applications, &description, &selector), "Cannot inspect signing permission")
     guard let applications = applications, CFArrayGetCount(applications) == 0,
           selector.contains(.requirePassphase),
-          selector.rawValue == requiredPasswordBit || selector.rawValue == passwordPromptSelector.rawValue else {
+          selector.rawValue == passwordPromptSelector.rawValue else {
         let trustedCount = applications.map { String(CFArrayGetCount($0)) } ?? "unrestricted"
         let rights = authorizations(acl).sorted().joined(separator: ",")
         throw SignerError(code: "key_policy_invalid", message: "Cannot verify the per-signature password policy (rights=\(rights), trusted_apps=\(trustedCount), prompt_flags=\(selector.rawValue)). Create a new identity; do not select Always Allow in the Keychain prompt.")
@@ -324,7 +325,7 @@ func selfTest() throws -> [String: Any] {
     }
     do { try verifyACL(access) } catch { rejectedPermissivePolicy = true }
     guard rejectedPermissivePolicy else { throw SignerError(code: "self_test_failed", message: "Permissive ACL was accepted") }
-    let invalidSelectors: [UInt16] = [requiredPasswordBit.byteSwapped,
+    let invalidSelectors: [UInt16] = [requiredPasswordBit, requiredPasswordBit.byteSwapped,
         requiredPasswordBit | 0x0002, requiredPasswordBit | SecKeychainPromptSelector.unsignedAct.rawValue]
     for flags in invalidSelectors {
         let invalidAccess = try makeACL()
@@ -356,6 +357,7 @@ func selfTest() throws -> [String: Any] {
     return ["ok": true, "method": method, "acl_policy_checked": true,
             "isolated_sign_and_owner": true,
             "password_selector": Int(passwordPromptSelector.rawValue),
+            "unstable_password_selector_rejected": true,
             "swapped_only_and_unknown_selectors_rejected": true,
             "permissive_acl_rejected": true, "signature_roundtrip": true,
             "changed_challenge_rejected": true, "persistent_keys_created": false,
