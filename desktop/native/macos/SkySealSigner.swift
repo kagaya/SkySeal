@@ -88,7 +88,9 @@ func requirePrompt(_ acl: SecACL) throws {
     try check(SecACLCopyContents(acl, &applications, &description, &selector), "Cannot inspect signing permission")
     guard let applications = applications, CFArrayGetCount(applications) == 0,
           selector.contains(.requirePassphase) else {
-        throw SignerError(code: "key_policy_invalid", message: "This key permits unattended access. Create a new identity; do not select Always Allow in the Keychain prompt.")
+        let trustedCount = applications.map { String(CFArrayGetCount($0)) } ?? "unrestricted"
+        let rights = authorizations(acl).sorted().joined(separator: ",")
+        throw SignerError(code: "key_policy_invalid", message: "This key permits unattended access (rights=\(rights), trusted_apps=\(trustedCount), prompt_flags=\(selector.rawValue)). Create a new identity; do not select Always Allow in the Keychain prompt.")
     }
 }
 
