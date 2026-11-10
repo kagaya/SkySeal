@@ -102,7 +102,7 @@ func verifyACL(_ access: SecAccess) throws {
         }
         if rights.contains(kSecACLAuthorizationSign as String) {
             guard rights == [kSecACLAuthorizationSign as String] else {
-                throw SignerError(code: "key_policy_invalid", message: "Signing authorization must be isolated")
+                throw SignerError(code: "key_policy_invalid", message: "Signing authorization must be isolated: \(rights.sorted().joined(separator: ", "))")
             }
             try requirePrompt(acl)
             signingEntries += 1
@@ -140,6 +140,10 @@ func makeACL() throws -> SecAccess {
             }
             try check(SecACLSetContents(acl, [] as CFArray, keyLabel as CFString, .requirePassphase), "Cannot protect policy ownership")
         } else {
+            // SecACLRemove keeps a deleted entry in the in-memory Access map
+            // until persistence. Clear its rights first so subsequent policy
+            // inspection cannot mistake its stale tags for a live grant.
+            try check(SecACLUpdateAuthorizations(acl, [] as CFArray), "Cannot clear default key permissions")
             try check(SecACLRemove(acl), "Cannot remove default key permissions")
         }
     }
@@ -279,6 +283,12 @@ func status() -> [String: Any] {
 func selfTest() throws -> [String: Any] {
     let access = try makeACL()
     try verifyACL(access)
+    let activeRights = try aclList(access).map { authorizations($0) }.filter { !$0.isEmpty }
+    guard activeRights.count == 2,
+          activeRights.contains([kSecACLAuthorizationSign as String]),
+          activeRights.contains([kSecACLAuthorizationChangeACL as String]) else {
+        throw SignerError(code: "self_test_failed", message: "Fresh policy must grant only isolated signing and policy ownership")
+    }
     var rejectedPermissivePolicy = false
     for acl in try aclList(access) where authorizations(acl).contains(kSecACLAuthorizationSign as String) {
         try check(SecACLSetContents(acl, nil, keyLabel as CFString, []), "Cannot prepare policy rejection check")
@@ -303,6 +313,7 @@ func selfTest() throws -> [String: Any] {
     }
     if let error = error { _ = error.takeRetainedValue() }
     return ["ok": true, "method": method, "acl_policy_checked": true,
+            "isolated_sign_and_owner": true,
             "permissive_acl_rejected": true, "signature_roundtrip": true,
             "changed_challenge_rejected": true, "persistent_keys_created": false,
             "user_approval_tested": false]
