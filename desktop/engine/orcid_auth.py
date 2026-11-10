@@ -2,7 +2,8 @@
 
 No SkySeal service, shared client secret, access-token persistence, or token-supplied
 key URL is used. Production ORCID registration must include CALLBACK_URI exactly.
-The local certificate is trusted only by an explicit ``trust_certificate`` call.
+Certificate setup requires an explicit ``trust_certificate`` action. Linux
+observes one browser connection; it does not change any certificate trust store.
 """
 
 from __future__ import annotations
@@ -277,22 +278,33 @@ def ensure_certificate(data_dir: Path | str) -> dict:
         "sha256": cert.fingerprint(hashes.SHA256()).hex(),
         "expires_at": cert.not_valid_after_utc.isoformat(), "callback_uri": CALLBACK_URI,
         "trust_scope": ("user Keychain / SSL / localhost" if sys.platform == "darwin"
-                        else "CurrentUser/Root" if sys.platform == "win32" else "unsupported platform"),
+                        else "CurrentUser/Root" if sys.platform == "win32"
+                        else "current browser connection / localhost:24731 / this certificate" if sys.platform == "linux"
+                        else "unsupported platform"),
         "trust_installation_is_explicit": True,
     }
 
 
-def trust_certificate(data_dir: Path | str) -> dict:
+def trust_certificate(data_dir: Path | str, *, expected_sha256: str | None = None) -> dict:
     """Explicit UI action; never elevate or silently install machine-wide trust.
 
     macOS requires its own authentication dialog even for per-user trust
     settings. Its trust rule is limited to SSL for localhost. The callback's
     exact certificate is checked using system trust after the change; passing
     a custom root to the verifier would incorrectly bypass that check.
+    On Linux, browser certificate stores vary by browser and packaging format.
+    An explicit, nonce-bound browser connection check replaces store mutation.
+    It reports only this observed connection, never system or durable trust.
     """
-    if sys.platform not in {"win32", "darwin"}:
-        raise ORCIDAuthError("Certificate trust installation is available only on Windows and macOS")
+    if sys.platform not in {"win32", "darwin", "linux"}:
+        raise ORCIDAuthError("Local certificate setup is available only on Windows, macOS, and Linux")
     info = ensure_certificate(data_dir)
+    if expected_sha256 is not None or sys.platform == "linux":
+        if (not isinstance(expected_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+                or not hmac.compare_digest(expected_sha256, info["sha256"])):
+            raise ORCIDAuthError("The local certificate fingerprint changed or was not confirmed; refresh the certificate settings and retry")
+    if sys.platform == "linux":
+        return _check_certificate_in_browser(info)
     if sys.platform == "darwin":
         return _trust_certificate_macos(info)
     env = dict(os.environ)
@@ -467,6 +479,170 @@ class _TLSReceiver(ThreadingHTTPServer):
         pass  # No request details, tracebacks, or bearer data in background logs.
 
 
+def _external_browser_environment() -> dict:
+    environment = dict(os.environ)
+    if getattr(sys, "frozen", False) and sys.platform == "linux":
+        # PyInstaller's private ELF search path must not affect system browsers
+        # or xdg-open's desktop helpers. Preserve any caller-supplied original.
+        original = environment.pop("LD_LIBRARY_PATH_ORIG", None)
+        if original is None:
+            environment.pop("LD_LIBRARY_PATH", None)
+        else:
+            environment["LD_LIBRARY_PATH"] = original
+    return environment
+
+
+def _open_browser(url: str) -> bool:
+    if sys.platform != "linux":
+        return webbrowser.open(url, new=1, autoraise=True)
+    try:
+        process = subprocess.Popen(["/usr/bin/xdg-open", url], stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=_external_browser_environment(), start_new_session=True)
+        try:
+            return process.wait(timeout=1) == 0
+        except subprocess.TimeoutExpired:
+            # A desktop opener may remain alive while its browser window is open.
+            # Browser confirmation or the OIDC callback, not launch success,
+            # determines whether the operation itself succeeds.
+            return True
+    except OSError:
+        return False
+
+
+def _browser_setup_page(route: str, script_nonce: str) -> bytes:
+    return ("""<!doctype html><html lang="ja"><meta charset="utf-8"><title>SkySeal HTTPS確認</title>
+<body><h1>SkySeal</h1><p id="status">このブラウザーからPC内のHTTPS接続を確認しています。</p>
+<script nonce=""" + '"' + script_nonce + '"' + """>
+(async () => {
+  const parameters = new URLSearchParams(location.hash.slice(1));
+  history.replaceState(null, '', location.pathname);
+  const status = document.getElementById('status');
+  try {
+    if (parameters.getAll('challenge').length !== 1) throw new Error('challenge');
+    const response = await fetch(""" + json.dumps(route + "/complete") + """, {
+      method: 'POST', credentials: 'omit', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({challenge: parameters.get('challenge')})});
+    const result = await response.json();
+    status.textContent = result.ok
+      ? '今回のHTTPS接続を確認しました。SkySealに戻ってください。ブラウザーや証明書が変わった場合は再確認してください。'
+      : '確認を完了できませんでした。SkySealからやり直してください。';
+  } catch (_) { status.textContent = '確認を完了できませんでした。SkySealからやり直してください。'; }
+})();
+</script></body></html>""").encode("utf-8")
+
+
+def _setup_handler_type(route: str, expected_nonce: str, result_queue: queue.Queue):
+    """A one-shot setup acknowledgment, independent from the OIDC receiver."""
+    if re.fullmatch(r"/setup/[A-Za-z0-9_-]{32}", route) is None:
+        raise ORCIDAuthError("Invalid local browser setup route")
+    lock = threading.Lock()
+    consumed = False
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, format, *args):
+            pass
+
+        def _send(self, status: int, body: bytes, content_type: str, script_nonce: str | None = None):
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+            scripts = f"'nonce-{script_nonce}'" if script_nonce else "'none'"
+            self.send_header("Content-Security-Policy", "default-src 'none'; script-src " + scripts + "; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+
+        def _host_valid(self):
+            return self.headers.get_all("Host", []) == [f"localhost:{CALLBACK_PORT}"]
+
+        def do_GET(self):
+            if not self._host_valid() or self.path != route:
+                self._send(404, b"Not found", "text/plain; charset=utf-8")
+                return
+            script_nonce = secrets.token_urlsafe(24)
+            self._send(200, _browser_setup_page(route, script_nonce), "text/html; charset=utf-8", script_nonce)
+
+        def do_POST(self):
+            nonlocal consumed
+            if (not self._host_valid() or self.path != route + "/complete"
+                    or self.headers.get_all("Origin", []) != [CALLBACK_ORIGIN]
+                    or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin"
+                    or self.headers.get("Content-Type") != "application/json"
+                    or self.headers.get("Transfer-Encoding") is not None):
+                self._send(403, b'{"ok":false}', "application/json")
+                return
+            try:
+                lengths = self.headers.get_all("Content-Length", [])
+                if len(lengths) != 1 or not lengths[0].isdigit() or not 1 <= int(lengths[0]) <= 1024:
+                    raise ValueError("Invalid body length")
+                raw = self.rfile.read(int(lengths[0]))
+                if len(raw) != int(lengths[0]):
+                    raise ValueError("Incomplete request")
+                payload = parse_json_bytes(raw, "browser HTTPS confirmation")
+                if (not isinstance(payload, dict) or set(payload) != {"challenge"}
+                        or not isinstance(payload["challenge"], str)
+                        or not hmac.compare_digest(payload["challenge"], expected_nonce)):
+                    raise ValueError("Invalid setup confirmation")
+                with lock:
+                    if consumed:
+                        raise ValueError("Setup confirmation already consumed")
+                    result_queue.put_nowait(True)
+                    consumed = True
+            except (ValueError, TypeError, queue.Full):
+                self._send(400, b'{"ok":false}', "application/json")
+                return
+            self._send(200, b'{"ok":true}', "application/json")
+
+    return Handler
+
+
+def _check_certificate_in_browser(info: dict, *, timeout: int | float = 180) -> dict:
+    """Observe one default-browser HTTPS connection, without editing trust stores.
+
+    The browser may need a user-approved exception for this exact installation
+    certificate. Managed browser policy can forbid that; timeout remains failure.
+    No persistent trust state is recorded or inferred from this observation.
+    """
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 600:
+        raise ORCIDAuthError("Browser HTTPS confirmation timeout must be between 1 and 600 seconds")
+    nonce = secrets.token_urlsafe(32)
+    route = "/setup/" + secrets.token_urlsafe(24)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(info["certificate_path"], info["key_path"])
+    result_queue: queue.Queue = queue.Queue(maxsize=1)
+    try:
+        server = _TLSReceiver(("127.0.0.1", CALLBACK_PORT), _setup_handler_type(route, nonce, result_queue))
+    except OSError as exc:
+        raise ORCIDAuthError("The local HTTPS port is unavailable; close another SkySeal login or setup and retry") from exc
+    server.tls_context = context
+    worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
+    worker.start()
+    try:
+        if not _open_browser(CALLBACK_ORIGIN + route + "#challenge=" + nonce):
+            raise ORCIDAuthError("Could not open the default browser; install xdg-utils and configure a desktop browser")
+        try:
+            result_queue.get(timeout=timeout)
+        except queue.Empty as exc:
+            raise ORCIDAuthError("Browser HTTPS confirmation timed out; compare the displayed certificate SHA-256 and approve only this localhost certificate if your browser permits it. No system trust was changed") from exc
+        return {**info, "trusted": False, "browser_verified": True,
+            "trust_scope": "current browser connection / localhost:24731 / this certificate",
+            "browser_confirmation_is_persistent": False}
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=6)
+
+
 def login(client_id: str, nonce: str, data_dir: Path | str, timeout: int = 180) -> dict:
     """Run one ORCID login in the default browser and verify its signed response."""
     if not isinstance(timeout, (int, float)) or not 1 <= timeout <= 600:
@@ -486,7 +662,7 @@ def login(client_id: str, nonce: str, data_dir: Path | str, timeout: int = 180) 
     worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
     worker.start()
     try:
-        if not webbrowser.open(url, new=1, autoraise=True):
+        if not _open_browser(url):
             raise ORCIDAuthError("Could not open the default browser for ORCID authentication")
         try:
             result = result_queue.get(timeout=timeout)

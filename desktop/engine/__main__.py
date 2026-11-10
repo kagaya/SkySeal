@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
             code, message = exc.code, str(exc)
         elif isinstance(exc, VerificationError):
             code, message = "verification_failed", str(exc)
-        elif type(exc).__name__ in {"WindowsAuthenticationError", "WindowsAuthError", "MacOSAuthError", "ORCIDError", "ORCIDAuthError", "TimestampError", "SkyWitnessError"}:
+        elif type(exc).__name__ in {"WindowsAuthenticationError", "WindowsAuthError", "MacOSAuthError", "LinuxAuthError", "ORCIDError", "ORCIDAuthError", "TimestampError", "SkyWitnessError"}:
             code, message = "operation_failed", str(exc)
         elif isinstance(exc, NetworkTrustError):
             code, message = "https_trust_unavailable", str(exc)

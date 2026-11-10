@@ -111,6 +111,68 @@ test('cancelled macOS trust authentication is never reported as registered',asyn
   assert.doesNotMatch(t.$('tls-state').textContent,/登録済み/);
   t.dom.window.close();
 });
+const linuxStatus={...status,host_platform:'linux',configured:true,platform:{available:true,backend:'linux-passphrase-p256'}};
+const linuxTls={certificate_path:'localhost.pem',sha256:'ab'.repeat(32),trusted:false,
+  trust_scope:'current browser connection / localhost:24731 / this certificate'};
+test('Linux uses an application passphrase and explicit scoped browser confirmation',async()=>{
+  const t=await setup((op)=>op==='status'?success(linuxStatus):op==='tls_status'?success(linuxTls)
+    :op==='trust_local_certificate'?success({...linuxTls,browser_verified:true,browser_confirmation_is_persistent:false}):undefined);
+  t.w.document.querySelector('[data-page="settings"]').click();
+  await until(()=>!t.$('confirm-cert').disabled);
+  assert.match(t.$('native-state').textContent,/Linux.*Pinentry/);
+  assert.match(t.$('identity-description').textContent,/SkySeal専用のパスフレーズ/);
+  assert.match(t.$('identity-description').textContent,/Pinentryの別ウィンドウ/);
+  assert.match(t.$('key-storage-note').textContent,/Linuxのログインパスワードとは別/);
+  assert.match(t.$('approval-description').textContent,/SkySeal専用のパスフレーズ/);
+  assert.doesNotMatch(t.$('identity-description').textContent,/Windows|Touch ID|キーチェーン/);
+  assert.equal(t.$('tls-fingerprint-label').textContent,'証明書 SHA-256');
+  assert.equal(t.$('tls-thumbprint').textContent,Array(32).fill('AB').join(':'));
+  assert.match(t.$('tls-state').textContent,/ブラウザー接続は未確認/);
+  t.$('trust-certificate').click();
+  assert.equal(t.$('certificate-dialog').open,true);
+  assert.equal(t.$('certificate-dialog-fingerprint').hidden,false);
+  assert.match(t.$('certificate-trust-description').textContent,/https:\/\/localhost:24731/);
+  assert.match(t.$('certificate-trust-description').textContent,/SHA-256.*一致/);
+  assert.match(t.$('certificate-dialog-fingerprint').textContent,/AB:AB/);
+  t.$('cancel-cert').click();
+  assert.equal(t.calls.some(c=>c.request?.op==='trust_local_certificate'),false);
+  t.$('trust-certificate').click(); t.$('confirm-cert').click();
+  await until(()=>t.calls.some(c=>c.request?.op==='trust_local_certificate'));
+  await until(()=>t.$('activity').hidden);
+  const params=t.calls.find(c=>c.request?.op==='trust_local_certificate').request.params;
+  assert.equal(params.expected_sha256,linuxTls.sha256);
+  assert.equal(t.$('tls-state').textContent,'今回のブラウザー接続を確認済み');
+  assert.doesNotMatch(t.$('tls-state').textContent,/登録済み|信頼済み/);
+  assert.match(t.$('notice-text').textContent,/今回のHTTPS接続/);
+  // A later status refresh does not turn the observation into persistent trust.
+  t.w.document.querySelector('[data-page="settings"]').click();
+  await until(()=>t.$('tls-state').textContent.includes('ブラウザー接続は未確認'));
+  assert.equal(t.$('enroll').disabled,false);
+  t.dom.window.close();
+});
+test('Linux browser confirmation rejects absent fingerprints and false trust claims',async()=>{
+  for (const tls of [{...linuxTls,sha256:undefined}, {...linuxTls,sha256:'invalid'}]) {
+    const t=await setup((op)=>op==='status'?success(linuxStatus):op==='tls_status'?success(tls):undefined);
+    t.w.document.querySelector('[data-page="settings"]').click();
+    await until(()=>t.$('activity').hidden);
+    t.$('trust-certificate').click();
+    assert.equal(t.$('confirm-cert').disabled,true);
+    assert.equal(t.calls.some(c=>c.request?.op==='trust_local_certificate'),false);
+    t.dom.window.close();
+  }
+  for (const result of [{...linuxTls,trusted:true}, {...linuxTls,browser_verified:true,sha256:'cd'.repeat(32)}]) {
+    const t=await setup((op)=>op==='status'?success(linuxStatus):op==='tls_status'?success(linuxTls)
+      :op==='trust_local_certificate'?success(result):undefined);
+    t.w.document.querySelector('[data-page="settings"]').click();
+    await until(()=>!t.$('confirm-cert').disabled);
+    t.$('trust-certificate').click(); t.$('confirm-cert').click();
+    await until(()=>!t.$('notice').hidden);
+    assert.equal(t.$('notice').classList.contains('error'),true);
+    assert.match(t.$('tls-state').textContent,/ブラウザー接続は未確認/);
+    assert.doesNotMatch(t.$('tls-state').textContent,/登録済み/);
+    t.dom.window.close();
+  }
+});
 test('Mac local user-presence claims are not shown as independently verified',async()=>{
   const t=await setup((op)=>op==='verify'?success({ok:true,signature_valid:true,user_verified:null,user_present:null,time_confirmed:false,
     authentication_assurance:'local_user_presence_not_attested',profile:'skyseal-local-macos-keychain-v0.1-draft'}):undefined,
@@ -121,6 +183,18 @@ test('Mac local user-presence claims are not shown as independently verified',as
   assert.match(t.$('verification-result').textContent,/署名が一致/);
   assert.match(t.$('verification-result').textContent,/Macの本人承認.*証拠単独では確認不可/);
   assert.doesNotMatch(t.$('verification-result').textContent,/本人確認を伴う承認確認済み/);
+  t.dom.window.close();
+});
+test('Linux evidence does not attest passphrase entry even when verified on another platform',async()=>{
+  const t=await setup((op)=>op==='verify'?success({ok:true,signature_valid:true,user_verified:null,user_present:null,time_confirmed:false,
+    authentication_assurance:'local_user_presence_not_attested',approval_method:'linux-passphrase-p256-v0.1',
+    profile:'skyseal-local-linux-passphrase-v0.1-draft'}):undefined,{paths:{evidence:['C:\\evidence.zip']}});
+  t.w.document.querySelector('[data-page="verify"]').click();
+  t.$('pick-evidence').click(); await until(()=>!t.$('verify').disabled);
+  t.$('verify').click(); await until(()=>!t.$('verification-result').hidden);
+  assert.match(t.$('verification-result').textContent,/署名が一致/);
+  assert.match(t.$('verification-result').textContent,/Linuxのパスフレーズ入力.*証拠単独では確認不可/);
+  assert.doesNotMatch(t.$('verification-result').textContent,/Macの本人承認|本人確認を伴う承認確認済み/);
   t.dom.window.close();
 });
 test('an identity created for another platform cannot enable sealing',async()=>{

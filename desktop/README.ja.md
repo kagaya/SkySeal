@@ -1,4 +1,4 @@
-# SkySeal Windows Desktop 0.2 — 開発版
+# SkySeal Windows Desktop 0.3 — 開発版
 
 SkySeal の処理を Windows PC 内で実行するデスクトップアプリです。対象ファイルの保存コピー、SHA-256 集合、本人承認の署名、ひまわり画像、時刻証明、処理履歴をローカルに保存します。既存の SkySeal VPS、Google Drive、公開サイトへの接続は通常の封緘に必要ありません。
 
@@ -8,7 +8,7 @@ SkySeal の処理を Windows PC 内で実行するデスクトップアプリで
 
 1. [Windows ビルドの実行一覧](https://github.com/kagaya/SkySeal/actions/workflows/desktop-windows.yml)で、対象のコミットの成功した実行を開きます。
 2. 成果物 `SkySeal-Windows-x64-development-unsigned` をダウンロードして ZIP を展開します。GitHub へのログインが必要です。
-3. ZIP 内の `SkySeal_0.2.0_x64-setup.exe` を実行し、現在の Windows ユーザー用にインストールします。開発用の Python、Node.js、Rust は不要です。
+3. ZIP 内の `SkySeal_0.3.0_x64-setup.exe` を実行し、現在の Windows ユーザー用にインストールします。開発用の Python、Node.js、Rust は不要です。
 4. SkySeal を起動し、以下の「最初の設定」を行います。本人登録前でもファイルの保存コピーと履歴の確認は利用できます。
 
 この開発版インストーラーは未署名のため、Windows に発行元未確認の警告が表示される場合があります。成果物には照合用の `SHA256SUMS.txt` も含めます。
@@ -51,6 +51,8 @@ ORCID の本番環境が登録した戻り先を受け付け、通常のブラ�
 ファイルの集合は、重複を除いた SHA-256 の集合として封緘されます。公開証拠は元のファイル名、ディレクトリー構造、同一内容のファイルの個数を証明しません。ファイル名と保存コピーの対応は PC 内の履歴に保持します。
 
 ## 証拠の受け渡しと鍵の保管
+
+デスクトップ0.3以降ではWindows・macOS・Linuxの証拠形式を相互検証できます。Linuxの新形式を検証する場合は、Windows側も0.3以降が必要です。各OSでは固有の署名鍵で新しく本人登録し、別OSの資格情報を署名に流用しません。
 
 書き出す証拠 ZIP には、ハッシュ集合、封緘署名、ORCID と公開鍵の対応、本人登録の承認署名、ひまわり画像、入手済みの OTS 証明、manifest が入ります。元ファイル、元のパス、認証器の生の credential ID、ORCID の access token は入れません。
 
