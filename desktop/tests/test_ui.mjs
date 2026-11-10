@@ -1,0 +1,107 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { JSDOM } from 'jsdom';
+
+const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const html = readFileSync(path.join(desktop, 'ui/index.html'), 'utf8');
+const script = readFileSync(path.join(desktop, 'ui/app.js'), 'utf8');
+const status = { configured: false, identity: null, platform: {available: true}, data_dir: 'C:\\SkySeal', orcid_client_id: '' };
+const draft = {job_id:'a'.repeat(32), state:'prepared', created_at:'2026-11-10T12:00:00Z', entry_count:1,
+  items:[{name:'<img src=x onerror=alert(1)>.txt',size:10,sha256:'a'.repeat(64)}], ots_state:'not_requested'};
+
+async function until(predicate) {
+  for (let i=0;i<150;i++) { if(predicate()) return; await new Promise(r=>setTimeout(r,5)); }
+  assert.fail('UI did not reach the expected state');
+}
+async function setup(responder, options={}) {
+  const dom = new JSDOM(html, {url:'https://tauri.localhost',runScripts:'outside-only'});
+  const {window:w}=dom, calls=[];
+  w.HTMLElement.prototype.scrollIntoView=()=>{};
+  w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
+  w.HTMLDialogElement.prototype.close=function(){this.open=false;};
+  if(!options.noBridge) w.__TAURI__={core:{invoke:async(command,args)=>{
+    calls.push({command,...args});
+    if(command==='choose_path') return options.paths?.[args.kind] || ['C:\\研究.txt'];
+    const {op,params}=args.request;
+    const result=await responder?.(op,params);
+    return result ?? {ok:true,result:op==='status'?status:op==='tls_status'?{callback_uri:'https://localhost:24731/callback',certificate_path:'local.pem'}:{}};
+  }},event:{listen:async()=>()=>{}}};
+  w.eval(script);
+  await until(()=>w.document.getElementById('activity').hidden);
+  return {dom,w,calls,$:(id)=>w.document.getElementById(id)};
+}
+const success=(result)=>({ok:true,result});
+
+test('plain browser cannot perform desktop operations or simulate a seal',async()=>{
+  const t=await setup(null,{noBridge:true});
+  assert.equal(t.$('connection-banner').hidden,false);
+  for(const id of ['pick-files','prepare','seal','enroll','verify']) assert.equal(t.$(id).disabled,true);
+  t.dom.window.close();
+});
+test('prepare renders untrusted filenames as text and requires identity before seal',async()=>{
+  const t=await setup((op)=>op==='prepare'?success(draft):undefined);
+  t.$('pick-files').click(); await until(()=>!t.$('prepare').disabled);
+  t.$('prepare').click(); await until(()=>!t.$('review-card').hidden);
+  assert.equal(t.$('review-files').querySelector('img'),null);
+  assert.match(t.$('review-files').textContent,/<img/);
+  assert.equal(t.$('seal').disabled,true);
+  assert.deepEqual(Array.from(t.calls.find(c=>c.request?.op==='prepare').request.params.paths),['C:\\研究.txt']);
+  t.dom.window.close();
+});
+test('cancelled native approval is shown as failure, never saved as a successful seal',async()=>{
+  const t=await setup((op)=>op==='status'?success({...status,configured:true,identity:{identity_id:'https://orcid.org/0000-0003-3001-7690'}}):op==='prepare'?success(draft):op==='seal'?{ok:false,error:{message:'Approval cancelled'}}:undefined);
+  t.$('pick-files').click(); await until(()=>!t.$('prepare').disabled);
+  t.$('prepare').click(); await until(()=>!t.$('seal').disabled);
+  t.$('seal').click(); await until(()=>!t.$('notice').hidden);
+  assert.match(t.$('notice').textContent,/cancelled/);
+  assert.equal(t.$('seal-result').hidden,true);
+  t.dom.window.close();
+});
+test('pending verification is distinct from confirmed time and uses a trusted legacy preset',async()=>{
+  const t=await setup((op)=>op==='verify'?success({ok:true,signature_valid:true,user_verified:true,time_confirmed:false,candidate_match:null,identity_id:'ORCID',seal_id:'test',profile:'draft'}):undefined,{paths:{evidence:['C:\\evidence.zip']}});
+  t.w.document.querySelector('[data-page="verify"]').click();
+  t.$('pick-evidence').click(); await until(()=>!t.$('verify').disabled);
+  t.$('verify').click(); await until(()=>!t.$('verification-result').hidden);
+  assert.match(t.$('verification-result').textContent,/未確定・未確認/);
+  const params=t.calls.find(c=>c.request?.op==='verify').request.params;
+  assert.equal(params.trusted_rp_id,'proof.excyberlab.net');
+  assert.equal(params.trusted_origin,'https://proof.excyberlab.net');
+  t.dom.window.close();
+});
+test('certificate trust is an explicit separate UI action',async()=>{
+  const t=await setup();
+  t.w.document.querySelector('[data-page="settings"]').click();
+  await until(()=>!t.$('trust-certificate').disabled);
+  assert.equal(t.calls.some(c=>c.request?.op==='trust_local_certificate'),false);
+  t.$('trust-certificate').click(); assert.equal(t.$('certificate-dialog').open,true);
+  t.$('cancel-cert').click(); assert.equal(t.calls.some(c=>c.request?.op==='trust_local_certificate'),false);
+  t.$('trust-certificate').click(); t.$('confirm-cert').click();
+  await until(()=>t.calls.some(c=>c.request?.op==='trust_local_certificate'));
+  await until(()=>t.$('activity').hidden);
+  t.dom.window.close();
+});
+test('UI prepare and history run against real isolated engine processes',async()=>{
+  const temporary=mkdtempSync(path.join(tmpdir(),'skyseal-ui-'));
+  try {
+    const input=path.join(temporary,'研究データ.txt'); writeFileSync(input,'exact original bytes\n');
+    const t=await setup((op,params)=>{
+      const result=spawnSync(process.env.SKYSEAL_TEST_PYTHON || 'python',['-m','desktop.engine'],{
+        cwd:path.dirname(desktop),env:{...process.env,SKYSEAL_DESKTOP_DATA_DIR:path.join(temporary,'data'),PYTHONUTF8:'1'},
+        input:JSON.stringify({op,params}),encoding:'utf8',timeout:15000});
+      assert.equal(result.status,0,result.stderr); return JSON.parse(result.stdout);
+    },{paths:{files:[input]}});
+    t.$('pick-files').click(); await until(()=>!t.$('prepare').disabled);
+    t.$('prepare').click(); await until(()=>!t.$('review-card').hidden);
+    assert.match(t.$('review-files').textContent,/研究データ.txt/);
+    assert.equal(t.$('seal').disabled,true);
+    t.w.document.querySelector('[data-page="history"]').click();
+    await until(()=>t.$('history-list').children.length===1);
+    assert.match(t.$('history-list').textContent,/準備済み/);
+    t.dom.window.close();
+  } finally { rmSync(temporary,{recursive:true,force:true}); }
+});

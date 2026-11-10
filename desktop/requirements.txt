@@ -1,0 +1,4 @@
+# Desktop runtime. Keep the verifier's supported cryptography major range.
+cryptography==46.0.7
+opentimestamps==0.4.5
+python-bitcoinlib==0.12.2

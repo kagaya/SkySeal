@@ -10,3 +10,11 @@ var/
 google-service-account*.json
 *.token
 drive-agent-work/
+desktop/node_modules/
+desktop/.venv/
+desktop/.build/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/binaries/*
+desktop/playwright-report/
+desktop/test-results/

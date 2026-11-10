@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop",
+  "description": "Local main window only. Native dialogs and engine operations are mediated by Rust.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
