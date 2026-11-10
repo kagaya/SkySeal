@@ -61,7 +61,9 @@ Windows Hello／FIDO2 の秘密鍵は認証器が管理します。データフ�
 ./desktop/scripts/build-windows.ps1
 ```
 
-スクリプトは `desktop/.venv` を作り、固定した直接依存パッケージを入れ、デスクトップ用テストを実行します。Python エンジンを PyInstaller で単一の実行ファイルへまとめ、実際の同梱実行ファイルで日本語パスの取り込みと再起動後の履歴を検査してから、Tauri の NSIS インストーラーを作成します。
+スクリプトは `desktop/.venv` を作り、固定した直接依存パッケージを入れ、デスクトップ用テストを実行します。Python エンジンを PyInstaller で単一の実行ファイルへまとめ、実際の同梱実行ファイルで OTS 証明の読み書き・対象一致・改変拒否、日本語パスの取り込み、再起動後の履歴を検査してから、Tauri の NSIS インストーラーを作成します。
+
+タイムスタンプ処理は `opentimestamps` ライブラリーを直接利用します。外部の `ots` コマンド、Bitcoin ウォレット、Bitcoin RPC、別途の OpenSSL DLL を必要としません。ブロックヘッダーとハッシュを扱うために `python-bitcoinlib` のコア部分を同梱します。
 
 出力先は次のとおりです。
 

@@ -6,14 +6,17 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args == ["--ots-self-test"]:
+        from .ots import self_test
+        print(json.dumps(self_test(), sort_keys=True))
+        return 0
+    if args == ["--ots", "--version"]:
+        import importlib.metadata
+        print("opentimestamps " + importlib.metadata.version("opentimestamps"))
+        return 0
     if args and args[0] == "--ots":
-        from otsclient.ots import main as ots_main
-        sys.argv = ["ots", *args[1:]]
-        try:
-            result = ots_main()
-            return result if isinstance(result, int) else 0
-        except SystemExit as exc:
-            return exc.code if isinstance(exc.code, int) else 1
+        print("Use the SkySeal engine API for timestamp operations", file=sys.stderr)
+        return 2
     from verifier.skyseal_verify import parse_json_bytes, VerificationError
     from .core import Engine, EngineError
     engine = None

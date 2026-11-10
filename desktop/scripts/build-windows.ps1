@@ -55,16 +55,23 @@ try {
         '--workpath', (Join-Path $buildRoot 'pyinstaller'),
         '--specpath', $buildRoot,
         '--paths', $repoRoot,
-        '--collect-all', 'otsclient', '--collect-all', 'opentimestamps',
-        '--collect-all', 'bitcoin',
-        '--copy-metadata', 'opentimestamps-client',
+        '--hidden-import', 'opentimestamps.core.timestamp',
+        '--hidden-import', 'opentimestamps.core.notary',
+        '--hidden-import', 'opentimestamps.core.op',
+        '--hidden-import', 'opentimestamps.core.serialize',
+        '--hidden-import', 'bitcoin.core',
+        '--exclude-module', 'otsclient',
+        '--exclude-module', 'bitcoin.wallet',
+        '--exclude-module', 'bitcoin.rpc',
+        '--exclude-module', 'bitcoin.core.key',
+        '--exclude-module', 'opentimestamps.core.git',
         '--copy-metadata', 'opentimestamps',
+        '--copy-metadata', 'python-bitcoinlib',
         '--copy-metadata', 'cryptography',
         (Join-Path $PSScriptRoot 'engine_entry.py')
     )
     $sidecarExe = Join-Path $binaryRoot ($sidecarName + '.exe')
     Invoke-Checked -Program $pythonExe -Arguments @((Join-Path $PSScriptRoot 'smoke_engine.py'), $sidecarExe)
-    Invoke-Checked -Program $sidecarExe -Arguments @('--ots', '--version')
 
     if (-not $EngineOnly) {
         Push-Location $desktopRoot
