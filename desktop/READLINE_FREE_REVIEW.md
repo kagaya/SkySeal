@@ -11,12 +11,12 @@ optional imports may still refer to readline; their ImportError fallbacks apply.
 
 ## Licensing status
 
-MIT is the intended policy for original code, subject to confirmation of rights
-with the university. This revision does not apply an MIT license, establish a
-copyright owner, or grant new rights to original code. Third-party licenses
-remain applicable to their respective components. Documents, images, archived
-evidence and third-party code are separate categories. Legal compliance review
-and corresponding-source completeness remain pending.
+MIT is now applied to original SkySeal software by Katsushi Kagaya. See the
+root LICENSE and LICENSE_SCOPE.md. The finishing source supplement includes
+them in its compliance directory too. Third-party
+libraries retain their own terms; graphics, historical reports and archived
+evidence are not automatically relicensed. Native provenance, source
+completeness, dependency security and acceptance review remain separate.
 
 ## Rebuild with a modified library
 
@@ -34,8 +34,11 @@ SKYSEAL_SKIP_DEPENDENCY_INSTALL=1 bash desktop/scripts/build-linux.sh
 The flag preserves your installed libraries. The ordinary default continues to
 install declared dependencies. Retain the diagnostic dependency list, source
 changes, all third-party notices, and the test results alongside the rebuilt
-package. This procedure needs separate validation using an actually modified
-LGPL library before it is represented as a completed relinking demonstration.
+package. An engine-level mechanical replacement demonstration passed in CI run
+42958783387: inert markers added to both LGPL libraries were found in the
+finished frozen engine, followed by offline smoke and TLS-root checks. This was
+not a rebuild from edited sdist through a complete GUI installer. Full-package
+replacement and native Windows/macOS demonstrations remain pending.
 
 CI tests use temporary test profiles and keys. Offline timestamp and workflow
 tests do not establish production ORCID authentication or Bitcoin confirmation.
