@@ -1,4 +1,4 @@
-# SkySeal Windows Desktop 0.1 — 開発版
+# SkySeal Windows Desktop 0.2 — 開発版
 
 SkySeal の処理を Windows PC 内で実行するデスクトップアプリです。対象ファイルの保存コピー、SHA-256 集合、本人承認の署名、ひまわり画像、時刻証明、処理履歴をローカルに保存します。既存の SkySeal VPS、Google Drive、公開サイトへの接続は通常の封緘に必要ありません。
 
@@ -8,7 +8,7 @@ SkySeal の処理を Windows PC 内で実行するデスクトップアプリで
 
 1. [Windows ビルドの実行一覧](https://github.com/kagaya/SkySeal/actions/workflows/desktop-windows.yml)で、対象のコミットの成功した実行を開きます。
 2. 成果物 `SkySeal-Windows-x64-development-unsigned` をダウンロードして ZIP を展開します。GitHub へのログインが必要です。
-3. ZIP 内の `SkySeal_0.1.0_x64-setup.exe` を実行し、現在の Windows ユーザー用にインストールします。開発用の Python、Node.js、Rust は不要です。
+3. ZIP 内の `SkySeal_0.2.0_x64-setup.exe` を実行し、現在の Windows ユーザー用にインストールします。開発用の Python、Node.js、Rust は不要です。
 4. SkySeal を起動し、以下の「最初の設定」を行います。本人登録前でもファイルの保存コピーと履歴の確認は利用できます。
 
 この開発版インストーラーは未署名のため、Windows に発行元未確認の警告が表示される場合があります。成果物には照合用の `SHA256SUMS.txt` も含めます。

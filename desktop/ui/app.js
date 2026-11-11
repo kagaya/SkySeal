@@ -49,14 +49,36 @@ function syncControls() {
   $('client-id').disabled = state.busy || Boolean(state.status?.identity);
   $('verify-client-id').disabled = state.busy;
   $('save-settings').disabled = state.busy || !hasBridge || Boolean(state.status?.identity);
-  $('seal').disabled = state.busy || !hasBridge || !state.status?.identity || !state.prepared || !canApprove(state.prepared);
+  $('seal').disabled = state.busy || !hasBridge || !state.status?.identity || state.status.identity.signing_compatible === false || !state.prepared || !canApprove(state.prepared);
   $('seal').textContent = state.prepared?.state === 'sealing' ? '本人承認をやり直す →' : '本人承認して封緘する →';
   $('trust-certificate').disabled = state.busy || !hasBridge || ['windows_required', 'unsupported_platform'].includes(state.status?.platform?.code);
-  $('seal-disabled-note').textContent = !state.status?.identity ? '封緘するには、設定画面でORCIDと署名鍵の本人登録を完了してください。' : '';
+  $('seal-disabled-note').textContent = !state.status?.identity ? '封緘するには、設定画面でORCIDと署名鍵の本人登録を完了してください。'
+    : state.status.identity.signing_compatible === false ? 'この本人登録の署名鍵は別のOS用です。この端末からは封緘できません。証拠の検証は利用できます。' : '';
 }
 function nativeAvailable() {
   const platform = state.status?.platform || {};
   return Boolean(platform.available ?? platform.supported ?? platform.webauthn_available);
+}
+function hostPlatform() { return state.status?.host_platform || ''; }
+function systemName() { return hostPlatform() === 'darwin' ? 'macOS' : hostPlatform() === 'win32' ? 'Windows' : 'OS'; }
+function renderPlatformLabels() {
+  const mac = hostPlatform() === 'darwin', windows = hostPlatform() === 'win32';
+  $('trust-certificate').textContent = mac ? '証明書をキーチェーンに登録' : windows ? '証明書をWindowsに登録' : '証明書を登録';
+  $('approval-description').textContent = mac
+    ? 'この保存コピーを対象に、ひまわり画像を取得し、キーチェーンの認証画面で署名を承認します。'
+    : windows ? 'この保存コピーを対象に、ひまわり画像を取得し、Windows Helloまたはセキュリティキーで本人承認します。'
+      : 'この保存コピーを対象に、ひまわり画像を取得し、このコンピューターの確認画面で本人承認します。';
+  $('identity-description').textContent = mac
+    ? 'Macのキーチェーンに署名鍵を作り、標準ブラウザでORCIDにサインインします。署名するときはキーチェーンの認証画面で承認します。'
+    : windows ? 'Windows HelloまたはFIDO2セキュリティキーを登録し、標準ブラウザでORCIDにサインインします。'
+      : 'このコンピューターで署名鍵を登録し、標準ブラウザでORCIDにサインインします。';
+  $('key-storage-note').textContent = mac
+    ? 'キーチェーンのパスワードで承認します。Macのログインパスワードと異なる場合があります。鍵は証拠ZIPに含めません。証拠単独では認証操作の実施を確認できません。'
+    : '署名鍵はOSまたは認証器が管理します。証拠ファイルのバックアップだけでは、鍵は復元できません。';
+  $('certificate-trust-description').textContent = mac
+    ? 'このMac専用の証明書を、現在のユーザーのキーチェーンと信頼設定に登録します。適用範囲はlocalhostのSSL通信です。続いてmacOSの認証画面が表示されます。'
+    : windows ? 'SkySealが作成したlocalhost用証明書を、Windowsの現在のユーザーの信頼済み証明書ストアに登録します。ORCID認証からこのPCに戻る際に使用します。'
+      : 'SkySealが作成したlocalhost用証明書を、現在のユーザーの信頼設定に登録します。ORCID認証からこのPCに戻る際に使用します。';
 }
 async function call(op, params = {}) {
   if (!hasBridge) throw new Error('SkySealデスクトップアプリから開いてください。ブラウザ表示ではPC内の処理を実行できません。');
@@ -93,6 +115,7 @@ function showPage(page) {
 }
 function renderStatus(status) {
   state.status = status;
+  renderPlatformLabels();
   $('client-id').value = status.orcid_client_id || '';
   $('data-dir').textContent = status.data_dir || '保存先を確認できません';
   $('registered-orcid').textContent = status.identity?.identity_id || '未登録';
@@ -102,17 +125,20 @@ function renderStatus(status) {
   mini.replaceChildren(document.createTextNode(status.identity ? (status.identity.display_name || '本人登録済み') : '本人登録が必要です'));
   mini.append(el('span', status.identity ? status.identity.identity_id?.replace('https://orcid.org/', '') || 'ローカルの署名鍵を使用' : 'ORCIDと署名鍵を設定'));
   const available = nativeAvailable();
-  $('native-state').textContent = available ? 'Windows WebAuthnを利用できます' : (status.platform?.reason || status.platform?.message || 'Windowsの実行環境で確認してください');
+  $('native-state').textContent = available
+    ? (hostPlatform() === 'darwin' ? 'macOSキーチェーンの署名を利用できます' : hostPlatform() === 'win32' ? 'Windows WebAuthnを利用できます' : 'このコンピューターの署名機能を利用できます')
+    : (status.platform?.reason || status.platform?.message || 'デスクトップアプリの実行環境で確認してください');
   $('enroll').textContent = status.identity ? '本人登録済み' : '本人登録を始める ↗';
   syncControls();
 }
 async function loadStatus() { renderStatus(await call('status')); }
-async function loadTls() {
-  const tls = await call('tls_status');
+function renderTls(tls) {
   $('callback-url').textContent = tls.callback_uri || 'https://localhost:24731/callback';
   $('tls-thumbprint').textContent = tls.thumbprint || tls.certificate_sha256 || '未生成';
-  $('tls-state').textContent = tls.trusted === true ? 'Windowsに登録済み' : tls.exists || tls.certificate_path ? 'PC専用の証明書を準備済み' : '未生成';
+  $('tls-state').textContent = tls.trusted === true ? `${systemName()}に登録済み` : tls.exists || tls.certificate_path ? 'PC専用の証明書を準備済み' : '未生成';
+  $('tls-scope').textContent = tls.trust_scope || '現在のユーザー';
 }
+async function loadTls() { renderTls(await call('tls_status')); }
 function renderSelection() {
   $('selection').hidden = !state.paths.length;
   $('drop-zone').hidden = Boolean(state.paths.length);
@@ -223,7 +249,11 @@ function renderVerification(result) {
   const checks = el('div', '', 'check-list');
   checkRow(checks, '内容と証拠の整合性', valid ? '確認済み' : '未確認', valid ? '' : 'error');
   checkRow(checks, '承認署名', result.signature_valid ? '署名が一致' : '未確認', result.signature_valid ? '' : 'pending');
-  checkRow(checks, '本人確認を伴う承認', result.user_verified ? '確認済み' : '未確認', result.user_verified ? '' : 'pending');
+  if (result.authentication_assurance === 'local_user_presence_not_attested') {
+    checkRow(checks, 'Macの本人承認', '署名時に要求・証拠単独では確認不可', 'pending');
+  } else {
+    checkRow(checks, '本人確認を伴う承認', result.user_verified ? '確認済み' : '未確認', result.user_verified ? '' : 'pending');
+  }
   checkRow(checks, '独立した時刻証明', result.time_confirmed ? '公開ブロック情報で照合済み' : '未確定・未確認', result.time_confirmed ? '' : 'pending');
   if (result.candidate_match !== null && result.candidate_match !== undefined) checkRow(checks, '選択ファイルのハッシュ', result.candidate_match ? '封緘した集合に含まれます' : '含まれていません', result.candidate_match ? '' : 'error');
   container.append(checks);
@@ -245,7 +275,7 @@ $('drop-zone').addEventListener('keydown', (event) => { if (event.target === $('
 $('clear-selection').addEventListener('click', () => { state.paths = []; renderSelection(); });
 $('prepare').addEventListener('click', () => task('対象をPC内に保存し、ハッシュを計算しています…', async () => renderPrepared(await call('prepare', {paths: state.paths}))));
 $('new-seal').addEventListener('click', newSeal);
-$('seal').addEventListener('click', () => task('ひまわり画像を取得し、本人承認を待っています。Windowsの確認画面で操作してください…', async () => {
+$('seal').addEventListener('click', () => task(`ひまわり画像を取得し、本人承認を待っています。${systemName()}の確認画面で操作してください…`, async () => {
   const job = await call('seal', {job_id: state.prepared.job_id});
   state.prepared = job; $('review-card').hidden = true; renderJob($('seal-result'), job, true);
 }));
@@ -263,12 +293,16 @@ $('verify').addEventListener('click', () => task('署名と証拠を検証して
 $('save-settings').addEventListener('click', () => task('設定を保存しています…', async () => { renderStatus(await call('configure', {orcid_client_id: $('client-id').value.trim()})); notify('設定を保存しました。'); }));
 $('trust-certificate').addEventListener('click', () => $('certificate-dialog').showModal());
 $('cancel-cert').addEventListener('click', () => $('certificate-dialog').close());
-$('confirm-cert').addEventListener('click', () => { $('certificate-dialog').close(); task('このPC専用の証明書をWindowsに登録しています…', async () => { await call('trust_local_certificate'); await loadTls(); notify('このPC専用の認証用証明書を登録しました。'); }); });
-$('enroll').addEventListener('click', () => task('Windowsの確認画面と標準ブラウザで本人登録を進めてください。認証の完了を待っています…', async () => { renderStatus(await call('identity_enroll')); notify('ORCIDと署名鍵の本人登録が完了しました。'); }));
+$('confirm-cert').addEventListener('click', () => { $('certificate-dialog').close(); task(`このPC専用の証明書を${systemName()}に登録しています。OSの認証画面が出た場合は内容を確認してください…`, async () => {
+  const tls = await call('trust_local_certificate');
+  if (tls.trusted !== true) throw new Error('証明書の信頼登録を確認できませんでした。');
+  renderTls(tls); notify('このPC専用の認証用証明書を登録しました。');
+}); });
+$('enroll').addEventListener('click', () => task(`${systemName()}の確認画面と標準ブラウザで本人登録を進めてください。認証の完了を待っています…`, async () => { renderStatus(await call('identity_enroll')); notify('ORCIDと署名鍵の本人登録が完了しました。'); }));
 
 async function initialize() {
   if (!hasBridge) {
-    $('connection-banner').textContent = '画面プレビューです。封緘・本人登録・ファイル操作には、Windows版SkySealアプリを起動してください。';
+    $('connection-banner').textContent = '画面プレビューです。封緘・本人登録・ファイル操作には、SkySealデスクトップアプリを起動してください。';
     $('connection-banner').hidden = false;
     renderStatus({configured: false, platform: {reason: 'デスクトップアプリで確認してください'}, data_dir: 'デスクトップアプリで確認できます'});
     syncControls(); return;

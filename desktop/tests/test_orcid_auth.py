@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import queue
 import ssl
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -188,6 +189,73 @@ class CertificateTests(unittest.TestCase):
             with self.assertRaisesRegex(auth.ORCIDAuthError, "incomplete"):
                 auth.ensure_certificate(temp)
             self.assertEqual(key.read_bytes(), b"existing")
+
+
+class CertificateTrustTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.info = auth.ensure_certificate(self.temporary.name)
+        self.keychain = str(Path.home() / "Library" / "Keychains" / "login.keychain-db")
+        self.current = subprocess.CompletedProcess([], 0, stdout=json.dumps(self.keychain) + "\n")
+        self.success = subprocess.CompletedProcess([], 0, stdout=b"")
+
+    def test_macos_requires_user_ssl_localhost_trust_and_independent_verification(self):
+        with patch.object(auth.sys, "platform", "darwin"), \
+                patch.object(auth, "ensure_certificate", return_value=self.info), \
+                patch.object(auth.subprocess, "run", side_effect=[self.current, self.success, self.success]) as run:
+            result = auth.trust_certificate(self.temporary.name)
+        self.assertTrue(result["trusted"])
+        self.assertEqual(result["trust_scope"], "user Keychain / SSL / localhost")
+        add = run.call_args_list[1].args[0]
+        self.assertEqual(add[:2], ["/usr/bin/security", "add-trusted-cert"])
+        self.assertNotIn("-d", add)  # No administrator trust settings.
+        self.assertEqual(add[add.index("-p") + 1], "ssl")
+        self.assertEqual(add[add.index("-s") + 1], "localhost")
+        self.assertEqual(add[-1], self.info["certificate_der_path"])
+        verify = run.call_args_list[2].args[0]
+        self.assertEqual(verify[:2], ["/usr/bin/security", "verify-cert"])
+        self.assertIn("-L", verify)  # Local trust evaluation, no CA downloads.
+        self.assertNotIn("-r", verify)  # Never supply a root that bypasses installed trust.
+        self.assertEqual(verify[verify.index("-n") + 1], "localhost")
+
+    def test_macos_cancelled_os_authentication_does_not_report_trusted(self):
+        cancelled = subprocess.CalledProcessError(128, ["security", "add-trusted-cert"])
+        with patch.object(auth.sys, "platform", "darwin"), \
+                patch.object(auth, "ensure_certificate", return_value=self.info), \
+                patch.object(auth.subprocess, "run", side_effect=[self.current, cancelled]) as run:
+            with self.assertRaises(auth.ORCIDAuthError):
+                auth.trust_certificate(self.temporary.name)
+        self.assertEqual(run.call_count, 2)
+
+    def test_macos_failed_post_import_verification_does_not_report_trusted(self):
+        rejected = subprocess.CalledProcessError(1, ["security", "verify-cert"])
+        with patch.object(auth.sys, "platform", "darwin"), \
+                patch.object(auth, "ensure_certificate", return_value=self.info), \
+                patch.object(auth.subprocess, "run", side_effect=[self.current, self.success, rejected]):
+            with self.assertRaises(auth.ORCIDAuthError):
+                auth.trust_certificate(self.temporary.name)
+
+    def test_macos_system_keychain_default_is_rejected_before_mutation(self):
+        system = subprocess.CompletedProcess([], 0, stdout='"/Library/Keychains/System.keychain"\n')
+        with patch.object(auth.sys, "platform", "darwin"), \
+                patch.object(auth, "ensure_certificate", return_value=self.info), \
+                patch.object(auth.subprocess, "run", return_value=system) as run:
+            with self.assertRaisesRegex(auth.ORCIDAuthError, "default Keychain"):
+                auth.trust_certificate(self.temporary.name)
+        self.assertEqual(run.call_count, 1)
+
+    def test_windows_still_imports_only_exact_certificate_to_current_user(self):
+        with patch.object(auth.sys, "platform", "win32"), \
+                patch.object(auth, "ensure_certificate", return_value=self.info), \
+                patch.object(auth.subprocess, "run", return_value=self.success) as run:
+            result = auth.trust_certificate(self.temporary.name)
+        self.assertTrue(result["trusted"])
+        call = run.call_args
+        self.assertIn("CurrentUser", call.args[0][-1])
+        self.assertNotIn("LocalMachine", call.args[0][-1])
+        self.assertEqual(call.kwargs["env"]["SKYSEAL_LOCAL_CERTIFICATE"], self.info["certificate_der_path"])
+        self.assertEqual(call.kwargs["env"]["SKYSEAL_LOCAL_THUMBPRINT"], self.info["thumbprint"])
 
 
 class CallbackTests(unittest.TestCase):

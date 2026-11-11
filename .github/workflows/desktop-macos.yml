@@ -1,0 +1,88 @@
+name: macOS desktop development build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'service/**'
+      - 'verifier/**'
+      - '.github/workflows/desktop-macos.yml'
+  push:
+    branches: ['feat/macos-desktop']
+    paths:
+      - 'desktop/**'
+      - 'service/**'
+      - 'verifier/**'
+      - '.github/workflows/desktop-macos.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-macos-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  macos-native:
+    name: macOS ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            label: Intel
+            native_arch: x86_64
+            python_arch: x64
+            rust_target: x86_64-apple-darwin
+          - runner: macos-15
+            label: AppleSilicon
+            native_arch: arm64
+            python_arch: arm64
+            rust_target: aarch64-apple-darwin
+    env:
+      PYTHONUTF8: '1'
+      MACOSX_DEPLOYMENT_TARGET: '12.3'
+      CARGO_TERM_COLOR: always
+      SKYSEAL_EXPECTED_ARCH: ${{ matrix.native_arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.python_arch }}
+          cache: pip
+          cache-dependency-path: |
+            desktop/requirements.txt
+            desktop/requirements-build.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+          shared-key: macos-${{ matrix.rust_target }}
+          cache-on-failure: true
+      - name: Build, audit and launch the native application
+        shell: bash
+        run: bash ./desktop/scripts/build-macos.sh
+      - name: Upload macOS package diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkySeal-macOS-${{ matrix.label }}-diagnostics
+          path: desktop/.build/macos-${{ matrix.rust_target }}/diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload ad-hoc signed development packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkySeal-macOS-${{ matrix.label }}-development-adhoc
+          path: desktop/.build/macos-${{ matrix.rust_target }}/dist/
+          if-no-files-found: error
+          retention-days: 14
