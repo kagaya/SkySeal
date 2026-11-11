@@ -34,7 +34,10 @@ assert libc == 'glibc' and tuple(map(int,version.split('.'))) <= (2,35), 'Build 
 PY
 export TMPDIR="$("$python_exe" -c 'import pathlib,tempfile; print(pathlib.Path(tempfile.gettempdir()).resolve())')"
 export SKYSEAL_TEST_PYTHON="$python_exe"
-"$python_exe" -m pip install -r "$desktop_root/requirements-build.txt"
+if [[ "${SKYSEAL_SKIP_DEPENDENCY_INSTALL:-0}" != 1 ]]; then
+  "$python_exe" -m pip install -r "$desktop_root/requirements-build.txt"
+fi
+"$python_exe" -m pip freeze --all > "$diagnostic_root/python-build-environment.txt"
 "$python_exe" -m unittest discover -s desktop/tests -v
 "$python_exe" "$script_dir/test-linux-freezer.py"
 
@@ -64,6 +67,8 @@ SKYSEAL_FREEZE_REPORT="$diagnostic_root/engine-elf-staging.json" \
   "$python_exe" -m PyInstaller --clean --noconfirm \
   --distpath "$binary_root" --workpath "$build_root/pyinstaller" \
   "$script_dir/linux-runtime.spec"
+"$python_exe" "$script_dir/audit-readline-free.py" "$binary_root/desktop-engine-$rust_target" \
+  --output "$diagnostic_root/readline-free.json"
 # Check the complete frozen runtime, including late bootstrap extensions,
 # before spending time compiling the GUI. The packaged app is audited again.
 "$python_exe" "$script_dir/audit-linux-runtime.py" \
@@ -131,6 +136,7 @@ tar --sort=name --owner=0 --group=0 --numeric-owner -czf \
   "$distribution_root/$artifact_base.tar.gz" -C "$build_root/portable" SkySeal
 cp "$desktop_root/README.linux.ja.md" "$distribution_root/README.linux.ja.md"
 cp "$desktop_root/README.ja.md" "$distribution_root/README.ja.md"
+cp "$desktop_root/READLINE_FREE_REVIEW.md" "$distribution_root/READLINE_FREE_REVIEW.md"
 "$python_exe" - "$distribution_root" "$diagnostic_root" "$artifact_base" <<'PY'
 import hashlib,json,pathlib,platform,subprocess,sys
 root=pathlib.Path(sys.argv[1]);diagnostics=pathlib.Path(sys.argv[2])
@@ -142,6 +148,8 @@ report={
  'build_os':platform.freedesktop_os_release(),
  'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
  'distribution_signature':'unsigned-development-package',
+ 'revision_purpose':'0.3.1 Readline-free experimental build; licensing review pending',
+ 'readline_audit':json.loads((diagnostics/'readline-free.json').read_text()),
  'runtime_audit':json.loads((diagnostics/'runtime-audit.json').read_text()),
  'runtime_elf_staging':json.loads((diagnostics/'engine-elf-staging.json').read_text()),
  'portable_application_smoke':'passed',

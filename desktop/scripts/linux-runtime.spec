@@ -25,10 +25,12 @@ a = Analysis(
     hiddenimports=(["opentimestamps.core.timestamp", "opentimestamps.core.notary",
                     "opentimestamps.core.op", "opentimestamps.core.serialize", "bitcoin.core"]
                    if engine else []),
-    excludes=(["otsclient", "bitcoin.wallet", "bitcoin.rpc", "bitcoin.core.key",
+    excludes=["readline"] + (["otsclient", "bitcoin.wallet", "bitcoin.rpc", "bitcoin.core.key",
                "opentimestamps.core.git"] if engine else []),
     noarchive=False,
 )
+# Reject accidental reintroduction before creating either the engine or CI worker.
+assert not any("readline" in name.lower() for name, *_ in [*a.pure, *a.binaries]), "Readline reintroduced"
 pyz = PYZ(a.pure)
 # PYZ adds bootstrap extensions such as _struct and zlib after Analysis. EXE
 # merges that dependency TOC too, so normalize every file TOC before packing.

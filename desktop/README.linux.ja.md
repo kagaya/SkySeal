@@ -16,7 +16,7 @@ Ubuntu上で、保存コピー、ファイルのハッシュ、封緘署名、�
 ZIPを展開し、そのフォルダーを端末で開いて実行します。
 
 ```sh
-sudo apt install ./SkySeal_0.3.0_Linux_x86_64_development.deb
+sudo apt install ./SkySeal_0.3.1_Linux_x86_64_development.deb
 ```
 
 アプリメニューから「SkySeal」を開きます。アプリ自体は通常のユーザーで実行します。起動に`sudo`は使いません。既にインストールされていない共有ライブラリーは、通常のUbuntuパッケージ取得としてネットワークから導入されます。
@@ -25,7 +25,7 @@ sudo apt install ./SkySeal_0.3.0_Linux_x86_64_development.deb
 
 ```sh
 sudo apt install libwebkit2gtk-4.1-0 pinentry-gtk2 xdg-utils ca-certificates
-tar -xzf SkySeal_0.3.0_Linux_x86_64_development.tar.gz
+tar -xzf SkySeal_0.3.1_Linux_x86_64_development.tar.gz
 ./SkySeal/skyseal-desktop
 ```
 
@@ -34,7 +34,7 @@ tar -xzf SkySeal_0.3.0_Linux_x86_64_development.tar.gz
 ## 最初の設定とORCID
 
 1. ORCIDのProduction Public APIクライアントIDを設定します。戻り先は`https://localhost:24731/callback`です。この戻り先を登録済みなら、Windows／Mac版で使用している同じ公開クライアントIDも使えます。共通のclient secretは不要です。
-2. 設定画面でローカルHTTPS証明書を用意し、「ブラウザーで接続を確認」を選びます。確認画面にはこのインストール専用の証明書のSHA-256が表示されます。
+2. 設定画面でローカルHTTPS証明書を用意し、「ブラウザーでHTTPSを確認」を選びます。確認画面にはこのインストール専用の証明書のSHA-256が表示されます。
 3. 既定ブラウザーに自分のPCの`https://localhost:24731`が開きます。自己署名証明書の確認が出た場合は、証明書の詳細にあるSHA-256とアプリの表示を照合し、この証明書・接続先に限って通常の許可操作を行います。ブラウザーのTLS検証を全体で無効にする設定や起動オプションは使用しません。
 4. ブラウザーに接続確認完了と表示されたらアプリへ戻り、本人登録を開始します。新しいSkySeal専用パスフレーズを2回入力し、ブラウザーでORCIDへログインします。登録内容への署名時に、そのパスフレーズをもう一度入力します。
 
