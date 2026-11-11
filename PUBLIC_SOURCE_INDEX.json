@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "source_folder": "https://drive.google.com/drive/folders/1Jf54XvL-NXTI5HkPfAkxpXN2FMDnCqpB",
+  "archives": [
+    {
+      "filename": "Sources_cpython_01.zip",
+      "url": "https://drive.google.com/file/d/1N8S4RRSKNq2IadpGCOE6NE4Mz3TK1kD_/view",
+      "sha256": "491eaec1d1cb749b9de8431467bf46ae14faab489529af2d34ff08a68b865a6e",
+      "size_bytes": 41367302
+    },
+    {
+      "filename": "Sources_native-extra_01.zip",
+      "url": "https://drive.google.com/file/d/1gj-NBHCOwVAA2yGBWC4ON34nccmjQqSv/view?usp=drivesdk",
+      "sha256": "2054011941f7e809150d141fc3965f4cc7c36bc77cc9fef3bf861f61b2093110",
+      "size_bytes": 10169709
+    },
+    {
+      "filename": "Sources_native_01.zip",
+      "url": "https://drive.google.com/file/d/1IzS3esZ9TIgu7IPGUjsMPD2zRAkdoQmy/view?usp=drivesdk",
+      "sha256": "f291c49df767503a7280548665b80bc7013504efdd5ec04a20ac3a8765a699f2",
+      "size_bytes": 30342258
+    },
+    {
+      "filename": "Sources_native_02.zip",
+      "url": "https://drive.google.com/file/d/1kumUAx9GmiNfrJ5jHh9EyOOsR2h7taln/view?usp=drivesdk",
+      "sha256": "3013079ceb194585376e037b6de7d12143d682c06e157edf9de1a0268b9910b8",
+      "size_bytes": 53097609
+    },
+    {
+      "filename": "Sources_python_01.zip",
+      "url": "https://drive.google.com/file/d/1w5-zT-bD-IX8XO-vf7ZKKPElxGvSWgOM/view?usp=drivesdk",
+      "sha256": "eac480e32d59ca3c3d7ebce36afc3a783f2edce71adad6f28115218cae72db5b",
+      "size_bytes": 12876151
+    },
+    {
+      "filename": "Sources_rust-lock-candidates_01.zip",
+      "url": "https://drive.google.com/file/d/174i9WznqpkP4NFP68YHr6Bk_Q_SURyQy/view?usp=drivesdk",
+      "sha256": "d64f1a8f5e99a4c699421a99c10db1f55c3cd4c522e109f9d9e967f1ef80db9e",
+      "size_bytes": 62103978
+    },
+    {
+      "filename": "Sources_ubuntu_01.zip",
+      "url": "https://drive.google.com/file/d/1-u-dG0FYEezXAGa9X6tjMKDeIgzaVNCb/view?usp=drivesdk",
+      "sha256": "46518ab2e5f84185e35e7d9bdf361e9c8d7e56aa3a42593eb666d61808351cf4",
+      "size_bytes": 1429065
+    },
+    {
+      "filename": "Sources_ubuntu_02.zip",
+      "url": "https://drive.google.com/file/d/1COMWrvm-H-JrzrrB5_7sCoCvUkcVKqGX/view?usp=drivesdk",
+      "sha256": "e49ce38acab34db7fbdcc6a411cb7476a6d32f0e66b03b640c08e1dce68afc79",
+      "size_bytes": 91583576
+    },
+    {
+      "filename": "Sources_ubuntu_03.zip",
+      "url": "https://drive.google.com/file/d/1vjgkblfworaClbEtoEIBvE0PQ9bpA3_s/view?usp=drivesdk",
+      "sha256": "542c30689f85d37568504e2885edb2be9adc1b53c475e83e417ceefd92dbcf36",
+      "size_bytes": 44095228
+    }
+  ],
+  "verification": "All public copies independently downloaded and SHA-256/size matched; anyone reader inherited, not discoverable in public search. Anonymous retrieval not independently tested.",
+  "scope": "Availability of these known source companions, not certification of every third-party licensing/native build obligation.",
+  "application_source": {
+    "filename": "SkySeal_0.3.1_Finishing_Source_MIT_20261111.zip",
+    "url": "https://drive.google.com/file/d/1Vkim-Bu_HUC5o-UJN3j6vE10Oh9l1M2c/view?usp=drivesdk",
+    "sha256": "3fa8458a368ae40ecf313ea251280a0118be3c6ddd15025f5e2daa76be4dc205",
+    "size_bytes": 3798861,
+    "base_commit": "e3141d12fcb3d51297c92df83ec08af9903f598f",
+    "snapshot_sha256": "2939323ddc7854a516c50b438fdc77896c26fe2bf4e9e586107acdaf7d13316e",
+    "verified_source_files": 1156,
+    "scope": "Finishing source snapshot with license/notice/build improvements; not a new compiled native release."
+  },
+  "total_zip_archives": 10
+}
