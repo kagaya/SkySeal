@@ -24,7 +24,18 @@ PROFILE = "skyseal-local-desktop-v0.1-draft"
 MAC_PROFILE = "skyseal-local-macos-keychain-v0.1-draft"
 MAC_METHOD = "macos-keychain-p256-v0.1"
 MAC_NAMESPACE = "net.excyberlab.skyseal.desktop.macos"
-SUPPORTED_PROFILES = frozenset({PROFILE, MAC_PROFILE})
+LINUX_PROFILE = "skyseal-local-linux-passphrase-v0.1-draft"
+LINUX_METHOD = "linux-passphrase-p256-v0.1"
+LINUX_NAMESPACE = "net.excyberlab.skyseal.desktop.linux"
+SUPPORTED_PROFILES = frozenset({PROFILE, MAC_PROFILE, LINUX_PROFILE})
+_NATIVE_PROFILES = {
+    MAC_PROFILE: {"method": MAC_METHOD, "namespace": MAC_NAMESPACE,
+                  "label": "macOS", "schema_name": "macos-keychain",
+                  "challenge_prefix": "SkySeal Local macOS Keychain "},
+    LINUX_PROFILE: {"method": LINUX_METHOD, "namespace": LINUX_NAMESPACE,
+                    "label": "Linux", "schema_name": "linux-passphrase",
+                    "challenge_prefix": "SkySeal Local Linux Passphrase "},
+}
 RP_ID = "skyseal.localhost"
 ORIGIN = "https://skyseal.localhost"
 GENESIS_SCHEMA = "urn:skyseal:local:identity-genesis:v0.1"
@@ -38,6 +49,10 @@ _SCHEMAS = {
                   for kind, name in (("genesis", "identity-genesis"),
                                      ("activation", "identity-activation"),
                                      ("seal", "seal"), ("manifest", "manifest"))},
+    LINUX_PROFILE: {kind: "urn:skyseal:local:linux-passphrase:" + name + ":v0.1"
+                    for kind, name in (("genesis", "identity-genesis"),
+                                       ("activation", "identity-activation"),
+                                       ("seal", "seal"), ("manifest", "manifest"))},
 }
 MANIFEST_SCHEMAS = frozenset(item["manifest"] for item in _SCHEMAS.values())
 BASE_ARTIFACTS = frozenset({"hashes.txt", "seal.skyseal.json", "identity-genesis.json",
@@ -65,14 +80,23 @@ def schema(profile: str, kind: str) -> str:
     return _SCHEMAS[profile][kind]
 
 
+def approval_context(profile: str) -> dict:
+    """Fixed public context for native signatures, never private key routing."""
+    schema(profile, "genesis")
+    if profile == PROFILE:
+        return {"rp_id": RP_ID, "origin": ORIGIN}
+    native = _NATIVE_PROFILES[profile]
+    return {"approval_method": native["method"], "key_namespace": native["namespace"]}
+
+
 def challenge(kind: str, payload: dict) -> bytes:
     if kind not in {"identity", "seal"}:
         raise ValueError("unsupported challenge kind")
     profile = payload.get("profile")
     schema(profile, "seal")
-    # Preserve every byte of the Windows v0.1 challenge. macOS uses a separate
-    # domain and binds its fixed signing method through the linked genesis.
-    prefix = "SkySeal Local Desktop " if profile == PROFILE else "SkySeal Local macOS Keychain "
+    # Preserve the Windows and macOS v0.1 bytes. Each native profile has its own
+    # challenge domain and fixed signing method through the linked genesis.
+    prefix = "SkySeal Local Desktop " if profile == PROFILE else _NATIVE_PROFILES[profile]["challenge_prefix"]
     return hashlib.sha256((prefix + kind + " v0.1\0").encode() + canonical_json(payload)).digest()
 
 
@@ -83,8 +107,9 @@ def enrollment_nonce(public_key: dict, algorithm: int, seed: str, profile: str =
         binding = {"schema": "urn:skyseal:local:orcid-key-binding:v0.1", "public_key": public_key,
             "algorithm": algorithm, "rp_id": RP_ID, "origin": ORIGIN, "seed": seed}
     else:
-        binding = {"schema": "urn:skyseal:local:macos-keychain:orcid-key-binding:v0.1",
-            "profile": profile, "approval_method": MAC_METHOD, "key_namespace": MAC_NAMESPACE,
+        native = _NATIVE_PROFILES[profile]
+        binding = {"schema": "urn:skyseal:local:" + native["schema_name"] + ":orcid-key-binding:v0.1",
+            "profile": profile, **approval_context(profile),
             "public_key": public_key, "algorithm": algorithm, "seed": seed}
     return encode_base64url(hashlib.sha256(canonical_json(binding)).digest())
 
@@ -119,14 +144,16 @@ def verify_assertion(assertion: dict, expected_challenge: bytes, genesis: dict) 
         _verify_webauthn_artifact(assertion, expected_challenge=expected_challenge,
             algorithm=algorithm, jwk=key, trusted_rp_id=RP_ID, trusted_origin=ORIGIN, context="local approval")
         return
-    _keys(assertion, {"method", "signature"}, "macOS assertion")
-    if assertion["method"] != MAC_METHOD or genesis.get("approval_method") != MAC_METHOD or genesis.get("key_namespace") != MAC_NAMESPACE:
-        raise VerificationError("unsupported macOS approval method or key namespace")
+    native = _NATIVE_PROFILES[profile]
+    label = native["label"]
+    _keys(assertion, {"method", "signature"}, label + " assertion")
+    if assertion["method"] != native["method"] or any(genesis.get(k) != v for k, v in approval_context(profile).items()):
+        raise VerificationError("unsupported " + label + " approval method or key namespace")
     if algorithm != -7 or not isinstance(expected_challenge, bytes) or len(expected_challenge) != 32:
-        raise VerificationError("macOS approval requires ES256 and a 32-byte challenge")
-    signature = decode_base64url(assertion["signature"], "macOS signature")
+        raise VerificationError(label + " approval requires ES256 and a 32-byte challenge")
+    signature = decode_base64url(assertion["signature"], label + " signature")
     if not 8 <= len(signature) <= 80:
-        raise VerificationError("invalid macOS signature length")
+        raise VerificationError("invalid " + label + " signature length")
     try:
         public_key = ec.EllipticCurvePublicNumbers(
             int.from_bytes(decode_base64url(key["x"], "public key x", 32), "big"),
@@ -134,7 +161,7 @@ def verify_assertion(assertion: dict, expected_challenge: bytes, genesis: dict) 
             ec.SECP256R1()).public_key()
         public_key.verify(signature, expected_challenge, ec.ECDSA(crypto_hashes.SHA256()))
     except (InvalidSignature, ValueError) as exc:
-        raise VerificationError("macOS approval signature verification failed") from exc
+        raise VerificationError(label + " approval signature verification failed") from exc
 
 
 def verify_identity(genesis: dict, activation: dict, client_id: str,
@@ -150,8 +177,8 @@ def verify_identity(genesis: dict, activation: dict, client_id: str,
         raise VerificationError("unsupported local identity profile")
     if profile == PROFILE and (genesis["rp_id"] != RP_ID or genesis["origin"] != ORIGIN):
         raise VerificationError("local identity RP/origin mismatch")
-    if profile == MAC_PROFILE and (genesis["approval_method"] != MAC_METHOD or genesis["key_namespace"] != MAC_NAMESPACE or genesis["algorithm"] != -7):
-        raise VerificationError("unsupported macOS approval method, key namespace, or algorithm")
+    if profile != PROFILE and (any(genesis.get(k) != v for k, v in approval_context(profile).items()) or genesis["algorithm"] != -7):
+        raise VerificationError("unsupported " + _NATIVE_PROFILES[profile]["label"] + " approval method, key namespace, or algorithm")
     if not client_id or genesis["orcid_client_id"] != client_id:
         raise VerificationError("ORCID client ID must match independent verifier configuration")
     validate_orcid(genesis["identity_id"], "local ORCID")
@@ -243,7 +270,10 @@ def verify_directory(directory: Path, *, client_id: str, token_verifier: Callabl
     windows = profile == PROFILE
     warnings = [
         "Experimental local desktop profile; native RP/origin does not attest application binary identity."
-        if windows else "Experimental macOS Keychain profile; this signature does not attest application identity or independently prove a password prompt.",
+        if windows else (
+            "Experimental macOS Keychain profile; this signature does not attest application identity or independently prove a password prompt."
+            if profile == MAC_PROFILE else
+            "Experimental Linux passphrase profile; this signature does not attest application identity, key storage protection, or independently prove a passphrase prompt."),
         "Historical ORCID token signature is checked against independently trusted issuer keys; expiry is not a new login.",
         "ORCID identity association and image-provider trust do not establish authorship or exact creation time."]
     result = {"ok": True, "profile": profile, "seal_id": payload["seal_id"],
@@ -254,6 +284,6 @@ def verify_directory(directory: Path, *, client_id: str, token_verifier: Callabl
         "time_confirmed": all(value == "confirmed" for value in timestamp_status.values()),
         "candidate_match": candidate_match, "warnings": warnings}
     if not windows:
-        result.update(approval_method=MAC_METHOD,
+        result.update(approval_method=_NATIVE_PROFILES[profile]["method"],
                       authentication_assurance="local_user_presence_not_attested")
     return result

@@ -1,7 +1,7 @@
-"""Public HTTPS trust for the standalone macOS Python runtime.
+"""Public HTTPS trust for standalone macOS and Linux Python runtimes.
 
-CPython/OpenSSL on macOS does not read the user's Keychain trust store. A frozen
-application must not depend on the build machine's CA path. Use the bundled
+CPython/OpenSSL on macOS does not read the user's Keychain trust store. Frozen
+macOS and Linux applications must not depend on the build machine's CA path. Use the bundled
 public CA set unless the user explicitly configured SSL_CERT_FILE. This is
 separate from the browser's localhost certificate trust for ORCID callbacks.
 """
@@ -18,7 +18,7 @@ class NetworkTrustError(RuntimeError):
 
 
 def initialize_https_trust() -> dict:
-    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
+    if sys.platform not in {"darwin", "linux"} or not getattr(sys, "frozen", False):
         return {"source": "platform-default", "bundled_public_roots": False}
     configured = os.environ.get("SSL_CERT_FILE")
     if configured:

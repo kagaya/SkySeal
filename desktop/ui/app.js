@@ -3,7 +3,7 @@
 // This window has no remote content, arbitrary command execution, or browser-mode mocks.
 // Every user-supplied string is rendered with textContent.
 const $ = (id) => document.getElementById(id);
-const state = {page: 'seal', busy: false, status: null, paths: [], prepared: null, jobs: [], evidence: '', candidate: ''};
+const state = {page: 'seal', busy: false, status: null, tls: null, paths: [], prepared: null, jobs: [], evidence: '', candidate: ''};
 const labels = {seal: '封緘する', history: '履歴', verify: '証拠を検証', settings: '設定'};
 const bridge = window.__TAURI__?.core;
 const hasBridge = Boolean(bridge?.invoke);
@@ -52,6 +52,7 @@ function syncControls() {
   $('seal').disabled = state.busy || !hasBridge || !state.status?.identity || state.status.identity.signing_compatible === false || !state.prepared || !canApprove(state.prepared);
   $('seal').textContent = state.prepared?.state === 'sealing' ? '本人承認をやり直す →' : '本人承認して封緘する →';
   $('trust-certificate').disabled = state.busy || !hasBridge || ['windows_required', 'unsupported_platform'].includes(state.status?.platform?.code);
+  $('confirm-cert').disabled = state.busy || !hasBridge || (hostPlatform() === 'linux' && !/^[0-9a-f]{64}$/.test(state.tls?.sha256 || ''));
   $('seal-disabled-note').textContent = !state.status?.identity ? '封緘するには、設定画面でORCIDと署名鍵の本人登録を完了してください。'
     : state.status.identity.signing_compatible === false ? 'この本人登録の署名鍵は別のOS用です。この端末からは封緘できません。証拠の検証は利用できます。' : '';
 }
@@ -60,25 +61,35 @@ function nativeAvailable() {
   return Boolean(platform.available ?? platform.supported ?? platform.webauthn_available);
 }
 function hostPlatform() { return state.status?.host_platform || ''; }
-function systemName() { return hostPlatform() === 'darwin' ? 'macOS' : hostPlatform() === 'win32' ? 'Windows' : 'OS'; }
+function systemName() { return hostPlatform() === 'darwin' ? 'macOS' : hostPlatform() === 'win32' ? 'Windows' : hostPlatform() === 'linux' ? 'Linux' : 'OS'; }
 function renderPlatformLabels() {
-  const mac = hostPlatform() === 'darwin', windows = hostPlatform() === 'win32';
-  $('trust-certificate').textContent = mac ? '証明書をキーチェーンに登録' : windows ? '証明書をWindowsに登録' : '証明書を登録';
+  const mac = hostPlatform() === 'darwin', windows = hostPlatform() === 'win32', linux = hostPlatform() === 'linux';
+  $('trust-certificate').textContent = mac ? '証明書をキーチェーンに登録' : windows ? '証明書をWindowsに登録' : linux ? 'ブラウザーでHTTPSを確認' : '証明書を登録';
   $('approval-description').textContent = mac
     ? 'この保存コピーを対象に、ひまわり画像を取得し、キーチェーンの認証画面で署名を承認します。'
     : windows ? 'この保存コピーを対象に、ひまわり画像を取得し、Windows Helloまたはセキュリティキーで本人承認します。'
+      : linux ? 'この保存コピーを対象に、ひまわり画像を取得し、Pinentryの別ウィンドウでSkySeal専用のパスフレーズを入力して署名します。'
       : 'この保存コピーを対象に、ひまわり画像を取得し、このコンピューターの確認画面で本人承認します。';
   $('identity-description').textContent = mac
     ? 'Macのキーチェーンに署名鍵を作り、標準ブラウザでORCIDにサインインします。署名するときはキーチェーンの認証画面で承認します。'
     : windows ? 'Windows HelloまたはFIDO2セキュリティキーを登録し、標準ブラウザでORCIDにサインインします。'
+      : linux ? 'SkySeal専用のパスフレーズで暗号化した署名鍵を作り、標準ブラウザーでORCIDにサインインします。パスフレーズはPinentryの別ウィンドウへ入力します。'
       : 'このコンピューターで署名鍵を登録し、標準ブラウザでORCIDにサインインします。';
   $('key-storage-note').textContent = mac
     ? 'キーチェーンのパスワードで承認します。Macのログインパスワードと異なる場合があります。鍵は証拠ZIPに含めません。証拠単独では認証操作の実施を確認できません。'
+    : linux ? 'Linuxのログインパスワードとは別の、SkySeal専用のパスフレーズです。署名ごとに入力し、忘れるとその鍵を使えません。秘密鍵は証拠ZIPに含めません。証拠単独では入力操作の実施を確認できません。'
     : '署名鍵はOSまたは認証器が管理します。証拠ファイルのバックアップだけでは、鍵は復元できません。';
   $('certificate-trust-description').textContent = mac
     ? 'このMac専用の証明書を、現在のユーザーのキーチェーンと信頼設定に登録します。適用範囲はlocalhostのSSL通信です。続いてmacOSの認証画面が表示されます。'
     : windows ? 'SkySealが作成したlocalhost用証明書を、Windowsの現在のユーザーの信頼済み証明書ストアに登録します。ORCID認証からこのPCに戻る際に使用します。'
+      : linux ? '標準ブラウザーで https://localhost:24731 に接続します。証明書の画面に出るSHA-256が下記と一致することを確かめ、この証明書と接続先だけを許可してください。OS全体の信頼設定は変更しません。'
       : 'SkySealが作成したlocalhost用証明書を、現在のユーザーの信頼設定に登録します。ORCID認証からこのPCに戻る際に使用します。';
+  $('certificate-dialog-title').textContent = linux ? 'このPCへのHTTPS接続を確認' : 'このPC専用の証明書を登録';
+  $('certificate-trust-note').textContent = linux
+    ? 'この結果は今回の接続確認です。ブラウザー・プロファイル・証明書が変わった場合は再確認してください。許可できない設定の場合は、確認を中止できます。'
+    : '他のPCと共有する証明書・秘密鍵は使用しません。登録先と識別子は設定画面で確認できます。';
+  $('confirm-cert').textContent = linux ? 'ブラウザーを開く' : '登録する';
+  $('certificate-dialog-fingerprint').hidden = !linux;
 }
 async function call(op, params = {}) {
   if (!hasBridge) throw new Error('SkySealデスクトップアプリから開いてください。ブラウザ表示ではPC内の処理を実行できません。');
@@ -126,16 +137,23 @@ function renderStatus(status) {
   mini.append(el('span', status.identity ? status.identity.identity_id?.replace('https://orcid.org/', '') || 'ローカルの署名鍵を使用' : 'ORCIDと署名鍵を設定'));
   const available = nativeAvailable();
   $('native-state').textContent = available
-    ? (hostPlatform() === 'darwin' ? 'macOSキーチェーンの署名を利用できます' : hostPlatform() === 'win32' ? 'Windows WebAuthnを利用できます' : 'このコンピューターの署名機能を利用できます')
+    ? (hostPlatform() === 'darwin' ? 'macOSキーチェーンの署名を利用できます' : hostPlatform() === 'win32' ? 'Windows WebAuthnを利用できます' : hostPlatform() === 'linux' ? '暗号化したLinux署名鍵とPinentryを利用できます' : 'このコンピューターの署名機能を利用できます')
     : (status.platform?.reason || status.platform?.message || 'デスクトップアプリの実行環境で確認してください');
   $('enroll').textContent = status.identity ? '本人登録済み' : '本人登録を始める ↗';
   syncControls();
 }
 async function loadStatus() { renderStatus(await call('status')); }
 function renderTls(tls) {
+  state.tls = tls;
   $('callback-url').textContent = tls.callback_uri || 'https://localhost:24731/callback';
-  $('tls-thumbprint').textContent = tls.thumbprint || tls.certificate_sha256 || '未生成';
-  $('tls-state').textContent = tls.trusted === true ? `${systemName()}に登録済み` : tls.exists || tls.certificate_path ? 'PC専用の証明書を準備済み' : '未生成';
+  const digest = tls.sha256 || tls.certificate_sha256;
+  const sha256 = /^[0-9a-f]{64}$/i.test(digest || '') ? digest.toUpperCase().match(/.{2}/g).join(':') : null;
+  $('tls-fingerprint-label').textContent = sha256 ? '証明書 SHA-256' : '証明書の識別子';
+  $('tls-thumbprint').textContent = sha256 || tls.thumbprint || '未生成';
+  $('certificate-dialog-fingerprint').textContent = sha256 ? `SHA-256: ${sha256}` : 'SHA-256を読み込めません。設定画面を開き直してください。';
+  $('tls-state').textContent = hostPlatform() === 'linux'
+    ? tls.browser_verified === true ? '今回のブラウザー接続を確認済み' : '証明書を準備済み（ブラウザー接続は未確認）'
+    : tls.trusted === true ? `${systemName()}に登録済み` : tls.exists || tls.certificate_path ? 'PC専用の証明書を準備済み' : '未生成';
   $('tls-scope').textContent = tls.trust_scope || '現在のユーザー';
 }
 async function loadTls() { renderTls(await call('tls_status')); }
@@ -250,7 +268,8 @@ function renderVerification(result) {
   checkRow(checks, '内容と証拠の整合性', valid ? '確認済み' : '未確認', valid ? '' : 'error');
   checkRow(checks, '承認署名', result.signature_valid ? '署名が一致' : '未確認', result.signature_valid ? '' : 'pending');
   if (result.authentication_assurance === 'local_user_presence_not_attested') {
-    checkRow(checks, 'Macの本人承認', '署名時に要求・証拠単独では確認不可', 'pending');
+    const linux = result.approval_method === 'linux-passphrase-p256-v0.1' || result.profile === 'skyseal-local-linux-passphrase-v0.1-draft';
+    checkRow(checks, linux ? 'Linuxのパスフレーズ入力' : 'Macの本人承認', '署名時に要求・証拠単独では確認不可', 'pending');
   } else {
     checkRow(checks, '本人確認を伴う承認', result.user_verified ? '確認済み' : '未確認', result.user_verified ? '' : 'pending');
   }
@@ -275,7 +294,7 @@ $('drop-zone').addEventListener('keydown', (event) => { if (event.target === $('
 $('clear-selection').addEventListener('click', () => { state.paths = []; renderSelection(); });
 $('prepare').addEventListener('click', () => task('対象をPC内に保存し、ハッシュを計算しています…', async () => renderPrepared(await call('prepare', {paths: state.paths}))));
 $('new-seal').addEventListener('click', newSeal);
-$('seal').addEventListener('click', () => task(`ひまわり画像を取得し、本人承認を待っています。${systemName()}の確認画面で操作してください…`, async () => {
+$('seal').addEventListener('click', () => task(hostPlatform() === 'linux' ? 'ひまわり画像を取得し、署名を待っています。PinentryにSkySeal専用のパスフレーズを入力してください…' : `ひまわり画像を取得し、本人承認を待っています。${systemName()}の確認画面で操作してください…`, async () => {
   const job = await call('seal', {job_id: state.prepared.job_id});
   state.prepared = job; $('review-card').hidden = true; renderJob($('seal-result'), job, true);
 }));
@@ -293,12 +312,15 @@ $('verify').addEventListener('click', () => task('署名と証拠を検証して
 $('save-settings').addEventListener('click', () => task('設定を保存しています…', async () => { renderStatus(await call('configure', {orcid_client_id: $('client-id').value.trim()})); notify('設定を保存しました。'); }));
 $('trust-certificate').addEventListener('click', () => $('certificate-dialog').showModal());
 $('cancel-cert').addEventListener('click', () => $('certificate-dialog').close());
-$('confirm-cert').addEventListener('click', () => { $('certificate-dialog').close(); task(`このPC専用の証明書を${systemName()}に登録しています。OSの認証画面が出た場合は内容を確認してください…`, async () => {
-  const tls = await call('trust_local_certificate');
-  if (tls.trusted !== true) throw new Error('証明書の信頼登録を確認できませんでした。');
-  renderTls(tls); notify('このPC専用の認証用証明書を登録しました。');
+$('confirm-cert').addEventListener('click', () => { $('certificate-dialog').close(); task(hostPlatform() === 'linux' ? '標準ブラウザーでlocalhostの証明書を確認してください。今回のHTTPS接続が確認できるまで待っています…' : `このPC専用の証明書を${systemName()}に登録しています。OSの認証画面が出た場合は内容を確認してください…`, async () => {
+  const linux = hostPlatform() === 'linux';
+  const fingerprint = state.tls?.sha256;
+  if (linux && !/^[0-9a-f]{64}$/.test(fingerprint || '')) throw new Error('証明書のSHA-256を読み込めません。設定画面を開き直してください。');
+  const tls = await call('trust_local_certificate', linux ? {expected_sha256: fingerprint} : {});
+  if (linux ? tls.browser_verified !== true || tls.sha256 !== fingerprint : tls.trusted !== true) throw new Error('証明書の接続確認・信頼登録を確認できませんでした。');
+  renderTls(tls); notify(linux ? 'このブラウザーからの今回のHTTPS接続を確認しました。ブラウザーを変更した場合は、もう一度確認してください。' : 'このPC専用の認証用証明書を登録しました。');
 }); });
-$('enroll').addEventListener('click', () => task(`${systemName()}の確認画面と標準ブラウザで本人登録を進めてください。認証の完了を待っています…`, async () => { renderStatus(await call('identity_enroll')); notify('ORCIDと署名鍵の本人登録が完了しました。'); }));
+$('enroll').addEventListener('click', () => task(hostPlatform() === 'linux' ? 'PinentryでSkySeal専用のパスフレーズを設定し、標準ブラウザーでORCIDにサインインしてください…' : `${systemName()}の確認画面と標準ブラウザで本人登録を進めてください。認証の完了を待っています…`, async () => { renderStatus(await call('identity_enroll')); notify('ORCIDと署名鍵の本人登録が完了しました。'); }));
 
 async function initialize() {
   if (!hasBridge) {

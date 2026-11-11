@@ -4,6 +4,7 @@ import copy
 import hashlib
 import http.client
 import json
+import os
 from pathlib import Path
 import queue
 import ssl
@@ -152,7 +153,7 @@ class TokenTests(unittest.TestCase):
                 return True
 
             with patch.object(auth, "_TLSReceiver", side_effect=receiver), \
-                patch.object(auth.webbrowser, "open", side_effect=browser), \
+                patch.object(auth, "_open_browser", side_effect=browser), \
                 patch.object(auth, "fetch_jwks", return_value={"keys": [self.jwk]}), \
                 patch.object(auth.time, "time", return_value=self.now):
                 return auth.login("APP-TEST", self.claims["nonce"], directory, timeout=5)
@@ -256,6 +257,168 @@ class CertificateTrustTests(unittest.TestCase):
         self.assertNotIn("LocalMachine", call.args[0][-1])
         self.assertEqual(call.kwargs["env"]["SKYSEAL_LOCAL_CERTIFICATE"], self.info["certificate_der_path"])
         self.assertEqual(call.kwargs["env"]["SKYSEAL_LOCAL_THUMBPRINT"], self.info["thumbprint"])
+
+
+class LinuxBrowserSetupTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.info = auth.ensure_certificate(self.temporary.name)
+
+    def test_linux_setup_requires_the_current_displayed_fingerprint_before_launch(self):
+        with patch.object(auth.sys, "platform", "linux"), patch.object(auth, "_check_certificate_in_browser") as check:
+            for digest in [None, "", "0" * 64, True, self.info["sha256"].upper(), "g" * 64]:
+                with self.subTest(digest=digest), self.assertRaisesRegex(auth.ORCIDAuthError, "fingerprint"):
+                    auth.trust_certificate(self.temporary.name, expected_sha256=digest)
+            check.assert_not_called()
+            check.return_value = {"browser_verified": True, "trusted": False}
+            self.assertFalse(auth.trust_certificate(self.temporary.name, expected_sha256=self.info["sha256"])["trusted"])
+            self.assertEqual(check.call_args.args[0]["sha256"], self.info["sha256"])
+
+    def test_setup_uses_real_tls_and_nonce_but_never_claims_persistent_or_system_trust(self):
+        receiver_class = auth._TLSReceiver
+        servers = []
+
+        def receiver(address, handler):
+            self.assertEqual(address, ("127.0.0.1", auth.CALLBACK_PORT))
+            server = receiver_class(("127.0.0.1", 0), handler)
+            servers.append(server)
+            return server
+
+        def browser(url):
+            parsed = urlsplit(url)
+            self.assertEqual(parsed.scheme, "https")
+            self.assertEqual(parsed.netloc, f"localhost:{auth.CALLBACK_PORT}")
+            self.assertRegex(parsed.path, r"^/setup/[A-Za-z0-9_-]{32}$")
+            nonce = parse_qs(parsed.fragment)["challenge"][0]
+            context = ssl.create_default_context(cafile=self.info["certificate_path"])
+            connection = http.client.HTTPSConnection("127.0.0.1", servers[0].server_port, context=context, timeout=3)
+            connection.request("GET", parsed.path, headers={"Host": parsed.netloc})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            page = response.read()
+            self.assertIn(b"history.replaceState", page)
+            self.assertNotIn(nonce.encode(), page)
+            connection.close()
+            connection = http.client.HTTPSConnection("127.0.0.1", servers[0].server_port, context=context, timeout=3)
+            connection.request("POST", parsed.path + "/complete", json.dumps({"challenge": nonce}),
+                headers={"Host": parsed.netloc, "Origin": auth.CALLBACK_ORIGIN, "Content-Type": "application/json"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+            connection.close()
+            return True
+
+        with patch.object(auth, "_TLSReceiver", side_effect=receiver), patch.object(auth, "_open_browser", side_effect=browser):
+            result = auth._check_certificate_in_browser(self.info, timeout=3)
+        self.assertTrue(result["browser_verified"])
+        self.assertFalse(result["trusted"])
+        self.assertFalse(result["browser_confirmation_is_persistent"])
+        self.assertEqual(servers[0].socket.fileno(), -1)
+        self.assertNotIn("browser_verified", auth.ensure_certificate(self.temporary.name))
+
+    def test_timeout_and_browser_failure_close_receiver_without_reporting_success(self):
+        receiver_class = auth._TLSReceiver
+        for launched in (True, False):
+            servers = []
+            def receiver(address, handler):
+                server = receiver_class(("127.0.0.1", 0), handler)
+                servers.append(server)
+                return server
+            with self.subTest(launched=launched), patch.object(auth, "_TLSReceiver", side_effect=receiver), \
+                    patch.object(auth, "_open_browser", return_value=launched):
+                with self.assertRaises(auth.ORCIDAuthError):
+                    auth._check_certificate_in_browser(self.info, timeout=1)
+            self.assertEqual(servers[0].socket.fileno(), -1)
+
+    def test_frozen_linux_opener_restores_original_library_environment_without_shell(self):
+        class Opener:
+            def wait(self, timeout):
+                return 0
+        for original in (None, "/user/explicit/libs"):
+            environment = {"LD_LIBRARY_PATH": "/bundle/_MEI", "DISPLAY": ":1"}
+            if original is not None:
+                environment["LD_LIBRARY_PATH_ORIG"] = original
+            with self.subTest(original=original), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(auth.sys, "platform", "linux"), patch.object(auth.sys, "frozen", True, create=True), \
+                    patch.object(auth.subprocess, "Popen", return_value=Opener()) as process:
+                self.assertTrue(auth._open_browser(auth.CALLBACK_URI))
+                command = process.call_args.args[0]
+                self.assertEqual(command, ["/usr/bin/xdg-open", auth.CALLBACK_URI])
+                self.assertNotIn("shell", process.call_args.kwargs)
+                env = process.call_args.kwargs["env"]
+                self.assertEqual(env.get("LD_LIBRARY_PATH"), original)
+                self.assertNotIn("LD_LIBRARY_PATH_ORIG", env)
+                self.assertEqual(os.environ["LD_LIBRARY_PATH"], "/bundle/_MEI")
+
+    def test_nonlinux_browser_behavior_is_preserved(self):
+        with patch.object(auth.sys, "platform", "darwin"), patch.object(auth.webbrowser, "open", return_value=True) as browser:
+            self.assertTrue(auth._open_browser(auth.CALLBACK_URI))
+        browser.assert_called_once_with(auth.CALLBACK_URI, new=1, autoraise=True)
+
+
+class LinuxSetupReceiverTests(unittest.TestCase):
+    def setUp(self):
+        self.route = "/setup/" + "r" * 32
+        self.results = queue.Queue(maxsize=1)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), auth._setup_handler_type(self.route, "expected-nonce", self.results))
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+
+    def request(self, *, payload=None, raw=None, headers=None, method="POST", path=None):
+        supplied = {"Host": f"localhost:{auth.CALLBACK_PORT}", "Origin": auth.CALLBACK_ORIGIN,
+            "Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"}
+        supplied.update(headers or {})
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        body = raw if raw is not None else json.dumps(payload if payload is not None else {"challenge": "expected-nonce"})
+        connection.request(method, self.route + "/complete" if path is None else path,
+            body=body if method == "POST" else None, headers=supplied)
+        response = connection.getresponse()
+        result = response.status, dict(response.getheaders()), response.read()
+        connection.close()
+        return result
+
+    def test_nonce_acknowledgment_is_one_shot(self):
+        self.assertEqual(self.request()[0], 200)
+        self.assertTrue(self.results.get_nowait())
+        self.assertEqual(self.request()[0], 400)
+        self.assertTrue(self.results.empty())
+
+    def test_wrong_route_host_origin_and_fetchsite_cannot_acknowledge(self):
+        for headers in ({"Host": "evil.invalid"}, {"Host": "localhost:80"}, {"Origin": "null"},
+                {"Origin": "https://attacker.invalid"}, {"Sec-Fetch-Site": "cross-site"},
+                {"Content-Type": "text/plain"}, {"Transfer-Encoding": "chunked"}):
+            with self.subTest(headers=headers):
+                self.assertEqual(self.request(headers=headers)[0], 403)
+                self.assertTrue(self.results.empty())
+        self.assertEqual(self.request(path="/callback")[0], 403)
+        self.assertEqual(self.request(method="GET", path=self.route + "/complete")[0], 404)
+
+    def test_wrong_duplicate_extra_and_oversized_nonce_payloads_rejected(self):
+        for payload in ({"challenge": "wrong"}, {"challenge": True}, {"challenge": "expected-nonce", "trusted": True},
+                {"challenge": "x" * 1024}):
+            with self.subTest(payload=str(payload)[:80]):
+                self.assertEqual(self.request(payload=payload)[0], 400)
+                self.assertTrue(self.results.empty())
+        self.assertEqual(self.request(raw='{"challenge":"expected-nonce","challenge":"expected-nonce"}')[0], 400)
+        self.assertEqual(self.request(method="PUT")[0], 501)
+        self.assertTrue(self.results.empty())
+
+    def test_setup_page_cleans_nonce_and_rejects_other_get_routes(self):
+        status, headers, body = self.request(method="GET", path=self.route)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertEqual(headers["Referrer-Policy"], "no-referrer")
+        self.assertIn("default-src 'none'", headers["Content-Security-Policy"])
+        self.assertIn(b"history.replaceState", body)
+        self.assertNotIn(b"expected-nonce", body)
+        self.assertEqual(self.request(method="GET", path=self.route + "?x=1")[0], 404)
+        self.assertTrue(self.results.empty())
 
 
 class CallbackTests(unittest.TestCase):

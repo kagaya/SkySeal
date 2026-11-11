@@ -5,6 +5,7 @@ a time stamp system
 
 - [Local Windows application: setup, build, and validation (Japanese)](desktop/README.ja.md)
 - [Local macOS application: Intel and Apple Silicon (Japanese)](desktop/README.macos.ja.md)
+- [Local Linux application: Ubuntu x86_64 (Japanese)](desktop/README.linux.ja.md)
 - The desktop application runs the sealing workflow on the PC and contacts
   ORCID, JMA, and timestamp services directly. Its explicitly versioned local
   proof profiles are experimental; production ORCID and native approval acceptance

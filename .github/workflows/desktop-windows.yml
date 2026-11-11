@@ -69,7 +69,7 @@ jobs:
         with:
           workspaces: desktop/src-tauri -> target
           shared-key: windows-x86_64-pc-windows-msvc
-          cache-on-failure: true
+          cache-on-failure: false
       - name: Build and test the desktop package
         shell: pwsh
         run: ./desktop/scripts/build-windows.ps1

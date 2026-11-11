@@ -36,9 +36,18 @@ def utcnow() -> str:
 def default_data_dir() -> Path:
     override = os.environ.get("SKYSEAL_DESKTOP_DATA_DIR")
     if override:
-        return Path(override).expanduser().absolute()
+        path = Path(override).expanduser()
+        if sys.platform == "linux" and not path.is_absolute():
+            raise EngineError("invalid_data_dir", "SKYSEAL_DESKTOP_DATA_DIR must be an absolute path")
+        return path.absolute()
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "SkySeal"
+    if sys.platform == "linux":
+        xdg = os.environ.get("XDG_DATA_HOME", "")
+        # The XDG base-directory specification requires absolute paths; ignore
+        # relative settings rather than writing secrets under the working dir.
+        base = Path(xdg) if xdg and Path(xdg).is_absolute() else Path.home() / ".local" / "share"
+        return base / "SkySeal"
     base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".local" / "share")))
     return base / "SkySeal"
 
@@ -101,6 +110,9 @@ class Engine:
             if sys.platform == "darwin":
                 from . import macos_auth
                 signer = macos_auth
+            elif sys.platform == "linux":
+                from .linux_auth import LinuxSigner
+                signer = LinuxSigner(self.root)
             else:
                 from . import windows_auth
                 signer = windows_auth
@@ -239,7 +251,9 @@ class Engine:
     def tls_status(self, **_) -> dict:
         return self.auth.ensure_certificate(self.root)
 
-    def trust_local_certificate(self, **_) -> dict:
+    def trust_local_certificate(self, expected_sha256=None, **_) -> dict:
+        if expected_sha256 is not None:
+            return self.auth.trust_certificate(self.root, expected_sha256=expected_sha256)
         return self.auth.trust_certificate(self.root)
 
     def identity_enroll(self, **_) -> dict:
@@ -260,10 +274,7 @@ class Engine:
             "created_at": utcnow(),
             "algorithm": credential["algorithm"], "public_key": credential["public_key"],
             "enrollment_seed": seed, "orcid_client_id": client_id, "orcid_id_token": result["id_token"]}
-        if self.profile == proof.PROFILE:
-            genesis.update(rp_id=proof.RP_ID, origin=proof.ORIGIN)
-        else:
-            genesis.update(approval_method=proof.MAC_METHOD, key_namespace=proof.MAC_NAMESPACE)
+        genesis.update(proof.approval_context(self.profile))
         payload = {"profile": self.profile, "genesis_digest": proof.object_digest(genesis),
             "created_at": utcnow(), "nonce": encode_base64url(secrets.token_bytes(32))}
         activation = {"schema": proof.schema(self.profile, "activation"), "payload": payload,

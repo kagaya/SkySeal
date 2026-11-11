@@ -21,7 +21,7 @@
       <div class="sidebar-bottom">
         <button class="nav-button settings-nav" data-page="settings"><span class="nav-icon" aria-hidden="true">⚙</span>設定</button>
         <div class="identity-mini"><span class="identity-dot" id="identity-dot"></span><div id="identity-mini">本人登録を確認中<span>ローカルの状態を読み込んでいます</span></div></div>
-        <div class="version">DESKTOP <span>0.2 · 開発版</span></div>
+        <div class="version">DESKTOP <span>0.3 · 開発版</span></div>
       </div>
     </aside>
     <main>
@@ -53,7 +53,7 @@
             </div>
             <div class="card seal-result" id="seal-result" hidden></div>
           </div>
-          <aside class="guide"><div class="guide-heading">証拠ができるまで</div><ol class="journey"><li><span>1</span><div><strong>内容を固定</strong><p>ファイルをPC内に保存し、内容のハッシュを記録。</p></div></li><li><span>2</span><div><strong>本人が承認</strong><p>今回の内容に対し、本人確認を伴う署名を取得。</p></div></li><li><span>3</span><div><strong>時刻証明を確認</strong><p>OpenTimestampsの確認を待ち、証拠に追加。</p></div></li></ol><div class="privacy-note"><span aria-hidden="true">↳</span><p>元のファイルはPC内に保存。外部には認証と証拠取得に必要な情報だけを送信します。</p></div></aside>
+          <aside class="guide"><div class="guide-heading">証拠ができるまで</div><ol class="journey"><li><span>1</span><div><strong>内容を固定</strong><p>ファイルをPC内に保存し、内容のハッシュを記録。</p></div></li><li><span>2</span><div><strong>本人が承認</strong><p>今回の内容に対し、承認操作を伴う署名を取得。</p></div></li><li><span>3</span><div><strong>時刻証明を確認</strong><p>OpenTimestampsの確認を待ち、証拠に追加。</p></div></li></ol><div class="privacy-note"><span aria-hidden="true">↳</span><p>元のファイルはPC内に保存。外部には認証と証拠取得に必要な情報だけを送信します。</p></div></aside>
         </div>
       </section>
       <section class="page" id="page-history" aria-labelledby="history-title" hidden>
@@ -72,14 +72,14 @@
         <div class="page-heading"><div><div class="eyebrow">YOUR IDENTITY, ON THIS PC</div><h1 id="settings-title">設定と本人登録</h1><p>ORCIDと、このPCで使う署名鍵を結び付けます。</p></div></div>
         <div class="settings-grid">
           <div class="card"><div class="card-heading"><h2>ORCID認証</h2><span class="step-label">01</span></div><label class="field-label" for="client-id">ORCID Public API クライアントID</label><input id="client-id" type="text" autocomplete="off" spellcheck="false" placeholder="APP-…"><p class="fine-note">本番ORCIDに登録したアプリのIDです。共通のclient secretは使用しません。</p><label class="field-label">登録する戻り先URL</label><code class="callback-url" id="callback-url">https://localhost:24731/callback</code><div class="button-row right"><button class="button secondary" id="save-settings">設定を保存</button></div></div>
-          <div class="card"><div class="card-heading"><h2>PC内の認証受付</h2><span class="step-label">02</span></div><p class="body-copy">認証後にブラウザからこのPCへ安全に戻るため、PC専用のHTTPS証明書を使用します。</p><dl class="meta"><dt>状態</dt><dd id="tls-state">未確認</dd><dt>証明書の識別子</dt><dd id="tls-thumbprint" class="mono">未確認</dd><dt>登録先・適用範囲</dt><dd id="tls-scope">未確認</dd></dl><div class="button-row right"><button class="button secondary" id="trust-certificate">証明書を登録</button></div></div>
+          <div class="card"><div class="card-heading"><h2>PC内の認証受付</h2><span class="step-label">02</span></div><p class="body-copy">認証後にブラウザからこのPCへ安全に戻るため、PC専用のHTTPS証明書を使用します。</p><dl class="meta"><dt>状態</dt><dd id="tls-state">未確認</dd><dt id="tls-fingerprint-label">証明書の識別子</dt><dd id="tls-thumbprint" class="mono">未確認</dd><dt>登録先・適用範囲</dt><dd id="tls-scope">未確認</dd></dl><div class="button-row right"><button class="button secondary" id="trust-certificate">証明書を登録</button></div></div>
           <div class="card identity-card"><div class="card-heading"><h2>本人登録と署名鍵</h2><span class="step-label">03</span></div><dl class="meta"><dt>署名機能</dt><dd id="native-state">確認中</dd><dt>ORCID</dt><dd id="registered-orcid">未登録</dd></dl><p class="body-copy" id="identity-description">このコンピューターで署名鍵を登録し、標準ブラウザでORCIDにサインインします。</p><p class="fine-note" id="key-storage-note">署名鍵はOSまたは認証器が管理します。証拠ファイルのバックアップだけでは、鍵は復元できません。</p><div class="button-row right"><button class="button primary" id="enroll">本人登録を始める <span aria-hidden="true">↗</span></button></div></div>
-          <div class="card storage-card"><div class="card-heading"><h2>ローカル保存</h2><span class="tag">このPC</span></div><label class="field-label">データの保存先</label><code class="storage-path" id="data-dir">読み込み中</code><p class="body-copy">保存コピー・処理履歴・証拠をこの場所に保持します。証拠ZIPの書き出しには元ファイルや非公開のパスを含めません。</p><p class="fine-note">この版は開発版です。ORCID本番認証とOSの本人承認の実機確認状況は、同梱のREADMEを参照してください。</p></div>
+          <div class="card storage-card"><div class="card-heading"><h2>ローカル保存</h2><span class="tag">このPC</span></div><label class="field-label">データの保存先</label><code class="storage-path" id="data-dir">読み込み中</code><p class="body-copy">保存コピー・処理履歴・証拠をこの場所に保持します。証拠ZIPの書き出しには元ファイルや非公開のパスを含めません。</p><p class="fine-note">この版は開発版です。ORCID本番認証と署名時の承認の実機確認状況は、同梱のREADMEを参照してください。</p></div>
         </div>
       </section>
-      <footer><span>SkySeal — evidence stays with you.</span><span>LOCAL DESKTOP / 0.2</span></footer>
+      <footer><span>SkySeal — evidence stays with you.</span><span>LOCAL DESKTOP / 0.3</span></footer>
     </main>
   </div>
-  <dialog id="certificate-dialog"><div class="dialog-content"><div class="eyebrow">LOCAL HTTPS</div><h2>このPC専用の証明書を登録</h2><p id="certificate-trust-description">SkySealが作成したlocalhost用証明書を、現在のユーザーの信頼設定に登録します。ORCID認証からこのPCに戻る際に使用します。</p><p class="fine-note">他のPCと共有する証明書・秘密鍵は使用しません。登録先と識別子は設定画面で確認できます。</p><div class="button-row right"><button class="button secondary" id="cancel-cert">キャンセル</button><button class="button primary" id="confirm-cert">登録する</button></div></div></dialog>
+  <dialog id="certificate-dialog"><div class="dialog-content"><div class="eyebrow">LOCAL HTTPS</div><h2 id="certificate-dialog-title">このPC専用の証明書を登録</h2><p id="certificate-trust-description">SkySealが作成したlocalhost用証明書を、現在のユーザーの信頼設定に登録します。ORCID認証からこのPCに戻る際に使用します。</p><code class="callback-url" id="certificate-dialog-fingerprint" hidden></code><p class="fine-note" id="certificate-trust-note">他のPCと共有する証明書・秘密鍵は使用しません。登録先と識別子は設定画面で確認できます。</p><div class="button-row right"><button class="button secondary" id="cancel-cert">キャンセル</button><button class="button primary" id="confirm-cert">登録する</button></div></div></dialog>
 </body>
 </html>
