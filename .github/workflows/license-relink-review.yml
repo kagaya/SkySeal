@@ -1,0 +1,45 @@
+name: LGPL replacement engine review
+on:
+  pull_request:
+    paths: ['.github/workflows/license-relink-review.yml', '.github/license-review/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  replacement:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf
+          python -m venv desktop/.venv
+          desktop/.venv/bin/python -m pip install -r desktop/requirements-build.txt
+      - name: Modify libraries, rebuild and test frozen engine
+        run: |
+          mkdir -p license-review-output
+          desktop/.venv/bin/python -m pip freeze --all > license-review-output/python-build-environment.txt
+          dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\n' > license-review-output/ubuntu-packages.tsv
+          desktop/.venv/bin/python .github/license-review/relink_probe.py prepare
+          SKYSEAL_FREEZE_KIND=engine SKYSEAL_FREEZE_REPORT="$PWD/license-review-output/staging.json" \
+            desktop/.venv/bin/python -m PyInstaller --clean --noconfirm \
+            --distpath license-review-output/engine --workpath license-review-output/build desktop/scripts/linux-runtime.spec
+          desktop/.venv/bin/python .github/license-review/relink_probe.py verify
+          desktop/.venv/bin/python desktop/scripts/audit-readline-free.py \
+            license-review-output/engine/desktop-engine-x86_64-unknown-linux-gnu --output license-review-output/readline-free.json
+          desktop/.venv/bin/python desktop/scripts/smoke_engine.py \
+            license-review-output/engine/desktop-engine-x86_64-unknown-linux-gnu | tee license-review-output/smoke.txt
+          env -u SSL_CERT_FILE license-review-output/engine/desktop-engine-x86_64-unknown-linux-gnu --tls-self-test > license-review-output/tls.json
+          cp -r /usr/share/doc/libffi8 /usr/share/doc/libreadline8 /usr/share/doc/libtinfo6 /usr/share/doc/libbz2-1.0 /usr/share/doc/liblzma5 /usr/share/doc/libsqlite3-0 /usr/share/doc/libssl3 /usr/share/doc/libuuid1 /usr/share/doc/zlib1g /usr/share/doc/libgcc-s1 license-review-output/
+          rm -rf license-review-output/build license-review-output/engine
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: LGPL-replacement-engine-review
+          path: license-review-output/
+          retention-days: 14
