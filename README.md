@@ -128,3 +128,8 @@ make_public_hashlist.sh
 https://gist.github.com/kagaya/a15dd35e66cb749fa2eb4a7860f90d1c
 sign_and_stamp.sh
 https://gist.github.com/kagaya/0b02a24cd10d5d4607d2a31ddb2195d0
+
+
+## Software license and distribution status
+
+Original SkySeal software is licensed under the [MIT License](LICENSE) by Katsushi Kagaya. See [LICENSE_SCOPE.md](LICENSE_SCOPE.md) for covered paths and exclusions. Third-party components retain their own terms; images, historical reports and sealed evidence are not automatically covered. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [DISTRIBUTION_STATUS.md](DISTRIBUTION_STATUS.md). This licensing update does not certify native packages as security-reviewed, fully tested or ready for general release.
