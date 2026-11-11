@@ -23,4 +23,13 @@ Official upstream references:
 
 ## License/source supplements
 
-THIRD_PARTY_NOTICES.md identifies major components and fixed source references. Full notice/source kits are prepared separately. Their availability is not complete until publication and recipient access have been verified. Old archives are not rewritten by this licensing update. No functionality branch is merged and no new native package is promoted to a final release by adding these notices.
+THIRD_PARTY_NOTICES.md identifies major components and fixed source references. All nine retained upstream source companion ZIPs have been published in the existing source folder and independently hash/permission verified. The finishing application source ZIP is supplied alongside them. See PUBLIC_SOURCE_INDEX.json for exact upstream-companion URLs and SHA-256. These available companions do not certify complete native provenance or all corresponding-source requirements. Old archives are not rewritten by this licensing update. No functionality branch is merged and no new native package is promoted to a final release by adding these notices.
+
+
+## Verified finishing application source download
+
+https://drive.google.com/file/d/1Vkim-Bu_HUC5o-UJN3j6vE10Oh9l1M2c/view?usp=drivesdk
+
+SHA-256: 3fa8458a368ae40ecf313ea251280a0118be3c6ddd15025f5e2daa76be4dc205
+
+The source ZIP includes finishing changes not yet compiled into new native packages or merged into these functionality branches. Its base application commit and per-file source manifest are included inside the ZIP.

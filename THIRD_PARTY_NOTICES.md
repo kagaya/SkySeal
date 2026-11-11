@@ -29,6 +29,6 @@ Fixed LGPL library sources:
 - https://files.pythonhosted.org/packages/90/a1/ca9d770094a0bfd0f2ce66b7180f0a7729b1b646d90f37f6debf38b28fab/python-bitcoinlib-0.12.2.tar.gz
   SHA-256: c65ab61427c77c38d397bfc431f71d86fd355b453a536496ec3fcb41bd10087d
 
-These references aid access but do not by themselves establish complete corresponding-source delivery, native build provenance or a fulfilled written source offer. The separately prepared notice/source supplement must be published and verified before it is represented as available. No new written source-offer commitment is made here.
+These references aid access but do not by themselves establish complete corresponding-source delivery, native build provenance or a fulfilled written source offer. All nine retained upstream source companions have now been published and hash/permission verified in the existing source folder. PUBLIC_SOURCE_INDEX.json provides their exact URLs and hashes; the finishing application source ZIP is supplied alongside them. This publication does not resolve the remaining native-provenance/source-completeness questions. No new written source-offer commitment is made here.
 
 See DISTRIBUTION_STATUS.md for known remaining work. Preserve upstream full copyright, permission and disclaimer texts when redistributing the actual packages.
